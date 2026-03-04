@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>두손푸드웨이 - 거래처원장 관리</title>
+  <link rel="stylesheet" href="css/linkflow-ui.css">
+  <link href="https://cdn.jsdelivr.net/npm/remixicon@4/fonts/remixicon.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+  <style>
+    body { font-family: 'Pretendard', -apple-system, sans-serif; margin: 0; background: var(--lf-bg); }
+
+    .app-layout { display: flex; flex-direction: column; min-height: 100vh; }
+    .app-content { flex: 1; padding: 24px; max-width: 1400px; margin: 0 auto; width: 100%; }
+
+    .tab-nav { display: flex; gap: 4px; background: var(--lf-white); padding: 6px; border-radius: var(--lf-radius); box-shadow: var(--lf-shadow-sm); margin-bottom: 24px; }
+    .tab-btn { padding: 10px 20px; border: none; background: transparent; border-radius: var(--lf-radius-sm); font-size: 14px; font-weight: 600; color: var(--lf-text-light); cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 6px; }
+    .tab-btn:hover { background: var(--lf-bg); color: var(--lf-text); }
+    .tab-btn.active { background: var(--lf-primary); color: var(--lf-white); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: var(--lf-white); border-radius: var(--lf-radius); padding: 20px; box-shadow: var(--lf-shadow-sm); border: 1px solid var(--lf-border); }
+    .stat-card .stat-value { font-size: 28px; font-weight: 700; margin: 8px 0 4px; }
+    .stat-card .stat-label { font-size: 13px; color: var(--lf-text-light); }
+    .stat-icon { width: 40px; height: 40px; border-radius: var(--lf-radius-sm); display: flex; align-items: center; justify-content: center; font-size: 20px; }
+
+    .data-table { width: 100%; border-collapse: collapse; background: var(--lf-white); border-radius: var(--lf-radius); overflow: hidden; box-shadow: var(--lf-shadow-sm); }
+    .data-table th { background: var(--lf-bg); padding: 10px 14px; text-align: left; font-size: 11px; font-weight: 700; color: var(--lf-text-light); text-transform: uppercase; border-bottom: 1px solid var(--lf-border); white-space: nowrap; }
+    .data-table td { padding: 8px 14px; font-size: 13px; border-bottom: 1px solid #EAEDF0; }
+    .data-table tr:hover td { background: #F8FAFE; }
+    .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+    .ledger-card { background: var(--lf-white); border: 1px solid var(--lf-border); border-radius: 10px; margin-bottom: 24px; overflow: hidden; }
+    .ledger-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; background: linear-gradient(135deg, #F8F9FB, #EEF1F5); border-bottom: 1px solid var(--lf-border); flex-wrap: wrap; gap: 8px; }
+    .ledger-header-name { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700; }
+    .ledger-header-stats { display: flex; gap: 6px; flex-wrap: wrap; }
+    .ledger-stat { font-size: 11px; padding: 4px 10px; border-radius: 6px; background: var(--lf-white); border: 1px solid #E0E3E8; line-height: 1; }
+    .ledger-stat strong { font-size: 12px; }
+
+    .ledger-table { width: 100%; border-collapse: collapse; }
+    .ledger-table th { padding: 8px 14px; text-align: left; font-size: 11px; font-weight: 600; color: #8B95A5; background: #F5F6F8; border-bottom: 1px solid #E0E3E8; white-space: nowrap; }
+    .ledger-table td { padding: 7px 14px; font-size: 13px; border-bottom: 1px solid #F0F1F3; }
+    .ledger-table .num { text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; }
+    .ledger-table .date-row td { background: #F8F9FB; border-top: 1px solid #DDE1E6; padding-top: 9px; padding-bottom: 9px; }
+    .ledger-table .deposit-row td { background: #F4FBF6; border-top: 1px solid #D4EDDA; }
+    .ledger-table .balance-row td { background: #FAFAFA; }
+    .ledger-table .item-row td { padding-left: 28px; color: #3A4350; }
+    .ledger-table .item-row:hover td { background: #F0F4FF; }
+    .badge-sale { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #4A8CDB; color: #fff; font-weight: 600; letter-spacing: 0.5px; }
+    .badge-deposit { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #2EAA5C; color: #fff; font-weight: 600; letter-spacing: 0.5px; }
+
+    .action-bar { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+    .action-bar .spacer { flex: 1; }
+
+    .section-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+    .section-title i { color: var(--lf-primary); }
+
+    .client-list { display: flex; flex-direction: column; gap: 8px; }
+    .client-item { display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--lf-white); border-radius: var(--lf-radius-sm); border: 1px solid var(--lf-border); cursor: pointer; transition: all 0.2s; }
+    .client-item:hover { border-color: var(--lf-primary); box-shadow: var(--lf-shadow-sm); }
+    .client-item.active { border-color: var(--lf-primary); background: var(--lf-primary-bg); }
+    .client-item .client-info { flex: 1; }
+    .client-item .client-name { font-weight: 700; font-size: 15px; }
+    .client-item .client-meta { font-size: 12px; color: var(--lf-text-light); margin-top: 2px; }
+
+    .detail-panel { background: var(--lf-white); border-radius: var(--lf-radius); padding: 24px; border: 1px solid var(--lf-border); }
+
+    .deposit-row { display: flex; gap: 16px; margin-bottom: 16px; }
+    .deposit-card { flex: 1; background: var(--lf-white); border-radius: var(--lf-radius-sm); padding: 16px; border: 1px solid var(--lf-border); }
+
+    .ai-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; background: linear-gradient(135deg, #E8EAF6, #F4ECF7); color: #8E44AD; }
+
+    .toast-container { position: fixed; top: 20px; right: 20px; z-index: 10000; display: flex; flex-direction: column; gap: 8px; }
+    .toast { padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 500; color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: slideIn 0.3s ease; }
+    .toast-success { background: #27AE60; }
+    .toast-error { background: #E74C3C; }
+    .toast-info { background: #4DA8DA; }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    .loading-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); backdrop-filter: blur(4px); z-index: 9999; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
+    .loading-overlay.show { display: flex; }
+    .loading-overlay .lf-spinner { width: 48px; height: 48px; }
+    .loading-text { color: #fff; font-size: 16px; font-weight: 600; }
+
+    .empty-state { text-align: center; padding: 60px 20px; color: var(--lf-text-muted); }
+    .empty-state i { font-size: 48px; display: block; margin-bottom: 12px; }
+
+    .two-col { display: grid; grid-template-columns: 340px 1fr; gap: 20px; height: calc(100vh - 200px); }
+    .two-col > div:first-child { overflow-y: auto; position: sticky; top: 0; max-height: calc(100vh - 200px); }
+    .two-col > div:last-child { overflow-y: auto; max-height: calc(100vh - 200px); }
+    @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; height: auto; } .two-col > div:first-child, .two-col > div:last-child { max-height: none; } }
+
+    .client-search { position: sticky; top: 0; z-index: 5; background: var(--lf-bg); padding-bottom: 8px; }
+    .client-search input { width: 100%; padding: 10px 12px 10px 36px; border: 1px solid var(--lf-border); border-radius: var(--lf-radius-sm); font-size: 13px; background: var(--lf-white); transition: border-color 0.2s; }
+    .client-search input:focus { outline: none; border-color: var(--lf-primary); }
+    .client-search i { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--lf-text-muted); font-size: 16px; }
+
+    .ledger-date-header { background: var(--lf-bg); padding: 10px 16px; font-weight: 700; font-size: 13px; border-bottom: 2px solid var(--lf-border); display: flex; justify-content: space-between; align-items: center; }
+    .ledger-date-header .date-label { color: var(--lf-primary); }
+    .ledger-date-header .date-type { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: var(--lf-primary); color: #fff; }
+    .ledger-summary { background: #F8F9FA; padding: 12px 16px; display: flex; gap: 24px; flex-wrap: wrap; border-bottom: 1px solid var(--lf-border); font-size: 13px; }
+    .ledger-summary .ledger-item { display: flex; flex-direction: column; gap: 2px; }
+    .ledger-summary .ledger-label { font-size: 11px; color: var(--lf-text-muted); }
+    .ledger-summary .ledger-value { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+    .report-box { background: var(--lf-white); border-radius: var(--lf-radius); padding: 24px; border: 1px solid var(--lf-border); white-space: pre-wrap; font-size: 14px; line-height: 1.8; }
+  </style>
+</head>
+<body class="lf">
+
+<div class="app-layout">
+  <!-- Header -->
+  <div class="lf-header">
+    <div class="lf-header-left">
+      <i class="ri-file-list-3-line lf-header-logo"></i>
+      <span class="lf-header-title">거래처원장 관리</span>
+    </div>
+    <div class="lf-header-center"></div>
+    <div class="lf-header-right">
+      <span class="ai-badge"><i class="ri-sparkling-line"></i> Gemini AI</span>
+      <span class="text-xs text-light" id="statusText">연결 확인 중...</span>
+    </div>
+  </div>
+
+  <div class="app-content">
+    <!-- Tab Navigation -->
+    <div class="tab-nav">
+      <button class="tab-btn active" data-tab="dashboard"><i class="ri-dashboard-line"></i> 대시보드</button>
+      <button class="tab-btn" data-tab="compare"><i class="ri-git-merge-line"></i> 매출 대조</button>
+      <button class="tab-btn" data-tab="clients"><i class="ri-building-line"></i> 거래처 상세</button>
+      <button class="tab-btn" data-tab="deposits"><i class="ri-money-won-circle-line"></i> 입금 매칭</button>
+      <button class="tab-btn" data-tab="generate"><i class="ri-file-excel-2-line"></i> Excel 생성</button>
+    </div>
+
+    <!-- Dashboard Tab -->
+    <div class="tab-content active" id="tab-dashboard">
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-icon" style="background:#E8F5E9;color:#0F9D58"><i class="ri-file-text-line"></i></div>
+          <div class="stat-value" id="statSheetCount">-</div>
+          <div class="stat-label">Google Sheet 매출 건수</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:#EBF5FB;color:#3498DB"><i class="ri-building-2-line"></i></div>
+          <div class="stat-value" id="statGyeongliCount">-</div>
+          <div class="stat-label">경리나라 매출 건수</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:#FDEDEC;color:#E74C3C"><i class="ri-error-warning-line"></i></div>
+          <div class="stat-value" id="statMismatch">-</div>
+          <div class="stat-label">불일치 건수</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:#FEF9E7;color:#F39C12"><i class="ri-bank-card-line"></i></div>
+          <div class="stat-value" id="statDeposits">-</div>
+          <div class="stat-label">입금 내역</div>
+        </div>
+      </div>
+
+      <div class="action-bar">
+        <h3 class="section-title"><i class="ri-download-cloud-line"></i> 데이터 수집</h3>
+        <div class="spacer"></div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:center">
+        <label style="font-size:13px;font-weight:600;color:var(--lf-text-light)">수집 기간</label>
+        <input type="date" id="dateStart" class="lf-input" style="width:160px;padding:8px 12px;font-size:13px">
+        <span style="color:var(--lf-text-light)">~</span>
+        <input type="date" id="dateEnd" class="lf-input" style="width:160px;padding:8px 12px;font-size:13px">
+        <button class="lf-btn lf-btn-outline lf-btn-sm" onclick="setThisMonth()" style="font-size:12px">이번 달</button>
+        <button class="lf-btn lf-btn-outline lf-btn-sm" onclick="setLastMonth()" style="font-size:12px">지난 달</button>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px">
+        <button class="lf-btn lf-btn-primary" onclick="collectSheets()"><i class="ri-google-fill"></i> Google Sheet 수집</button>
+        <button class="lf-btn lf-btn-accent" onclick="collectGyeongli()"><i class="ri-building-line"></i> 경리나라 수집</button>
+        <button class="lf-btn lf-btn-outline" onclick="runCompare()"><i class="ri-git-merge-line"></i> 매출 대조 실행</button>
+        <button class="lf-btn lf-btn-success" onclick="runAnalysis()"><i class="ri-sparkling-line"></i> AI 분석</button>
+      </div>
+
+      <div id="dashboardLog" class="detail-panel" style="min-height:100px">
+        <div class="empty-state">
+          <i class="ri-inbox-line"></i>
+          <p>데이터를 수집하면 여기에 결과가 표시됩니다</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Compare Tab -->
+    <div class="tab-content" id="tab-compare">
+      <div class="action-bar">
+        <h3 class="section-title"><i class="ri-git-merge-line"></i> 매출 대조 결과</h3>
+        <div class="spacer"></div>
+        <button class="lf-btn lf-btn-outline lf-btn-sm" onclick="runCompare()"><i class="ri-refresh-line"></i> 다시 대조</button>
+        <button class="lf-btn lf-btn-primary lf-btn-sm" onclick="runAnalysis()"><i class="ri-sparkling-line"></i> AI 분석</button>
+      </div>
+      <div id="compareResult">
+        <div class="empty-state">
+          <i class="ri-git-merge-line"></i>
+          <p>대시보드에서 데이터를 수집한 후 대조를 실행하세요</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Clients Tab -->
+    <div class="tab-content" id="tab-clients">
+      <div class="action-bar">
+        <h3 class="section-title"><i class="ri-building-line"></i> 거래처별 상세 내역</h3>
+        <div class="spacer"></div>
+        <div class="client-search" style="position:relative;width:260px">
+          <i class="ri-search-line"></i>
+          <input type="text" id="clientSearchInput" placeholder="거래처 검색..." oninput="filterAllClients(this.value)">
+        </div>
+      </div>
+      <div id="clientsAllView">
+        <div class="empty-state">
+          <i class="ri-building-line"></i>
+          <p>경리나라 데이터를 먼저 수집하세요</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Deposits Tab -->
+    <div class="tab-content" id="tab-deposits">
+      <div class="action-bar">
+        <h3 class="section-title"><i class="ri-money-won-circle-line"></i> 입금 매칭</h3>
+        <div class="spacer"></div>
+        <button class="lf-btn lf-btn-primary lf-btn-sm" onclick="runDepositMatch()"><i class="ri-sparkling-line"></i> AI 매칭 제안</button>
+      </div>
+      <div id="depositResult">
+        <div class="empty-state">
+          <i class="ri-bank-card-line"></i>
+          <p>경리나라 데이터를 수집한 후 입금 매칭을 실행하세요</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Generate Tab -->
+    <div class="tab-content" id="tab-generate">
+      <div class="action-bar">
+        <h3 class="section-title"><i class="ri-file-excel-2-line"></i> 거래처원장 Excel 생성</h3>
+      </div>
+      <div class="detail-panel" style="text-align:center;padding:48px">
+        <div style="font-size:64px;color:var(--lf-primary);margin-bottom:16px"><i class="ri-file-excel-2-line"></i></div>
+        <h2 style="margin-bottom:8px">거래처원장 자동 생성</h2>
+        <p style="color:var(--lf-text-light);margin-bottom:24px">수집된 데이터를 기반으로 거래처원장 Excel 파일을 생성합니다.<br>품목, 수량, 단가, 공급가액, 부가세, 합계금액, 납품일, 비고가 자동으로 입력됩니다.</p>
+        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+          <button class="lf-btn lf-btn-success lf-btn-lg" onclick="generateExcel()"><i class="ri-file-excel-2-line"></i> Excel 생성</button>
+          <button class="lf-btn lf-btn-primary lf-btn-lg" id="downloadBtn" onclick="downloadExcel()" style="display:none"><i class="ri-download-line"></i> 다운로드</button>
+        </div>
+        <div id="generateStatus" style="margin-top:24px"></div>
+
+        <div id="aiReport" style="margin-top:32px;text-align:left;display:none">
+          <h3 class="section-title"><i class="ri-sparkling-line"></i> AI 월간 리포트</h3>
+          <div id="reportContent" class="report-box"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Loading Overlay -->
+<div class="loading-overlay" id="loading">
+  <div class="lf-spinner"></div>
+  <div class="loading-text" id="loadingText">처리 중...</div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+node_modules/
+.env
+output/
+config/google-credentials.json
+*.log
+read_excel.js
+read_excel_all.js
+.browser-data/
+.appstate.json
