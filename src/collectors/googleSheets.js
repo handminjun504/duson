@@ -36,9 +36,6 @@ const COL_ALIASES = {
   '매출 세액': 'vat',
   '매출합계금액': 'totalAmount',
   '매출\n합계금액': 'totalAmount',
-  '비고': 'note',
-  '비 고': 'note',
-  '메모': 'note',
 };
 
 function normalizeHeader(h) {
@@ -128,12 +125,19 @@ async function fetchSalesData(options = {}) {
   const allData = [];
 
   for (const sheetName of sheetNames) {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `'${sheetName}'!A1:AH5000`,
-    });
+    const [mainRes, noteRes] = await Promise.all([
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${sheetName}'!A1:T5000`,
+      }),
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${sheetName}'!AE1:AE5000`,
+      }),
+    ]);
 
-    const rows = res.data.values || [];
+    const rows = mainRes.data.values || [];
+    const noteRows = noteRes.data.values || [];
     if (rows.length < 3) continue;
 
     const headerIdx = findHeaderRow(rows);
@@ -158,11 +162,15 @@ async function fetchSalesData(options = {}) {
       continue;
     }
 
+    const noteHeaderVal = (noteRows[headerIdx]?.[0] || '').trim();
+    logger.info(`AE열 헤더: "${noteHeaderVal}", AE열 데이터: ${noteRows.length}행`);
+
     const dataRows = rows.slice(headerIdx + 1);
     let parsed = 0;
     let skipped = 0;
 
-    for (const row of dataRows) {
+    for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
+      const row = dataRows[rowIdx];
       if (!row || row.every(c => !c || !c.trim())) { skipped++; continue; }
 
       const get = (field) => {
@@ -203,7 +211,7 @@ async function fetchSalesData(options = {}) {
         supplyAmount: pn(get('supplyAmount')),
         vat: pn(get('vat')),
         totalAmount: pn(get('totalAmount')),
-        note: get('note'),
+        note: (noteRows[headerIdx + 1 + rowIdx]?.[0] || '').trim(),
         _sheet: sheetName,
         _raw: row.map(c => (c || '').trim()),
       };
