@@ -33,8 +33,9 @@ async function ensureBrowser() {
     }
   }
 
+  const headless = process.env.HEADLESS !== 'false';
   context = await chromium.launchPersistentContext(USER_DATA_DIR, {
-    headless: false,
+    headless,
     slowMo: 150,
     viewport: { width: 1400, height: 900 },
     locale: 'ko-KR',
