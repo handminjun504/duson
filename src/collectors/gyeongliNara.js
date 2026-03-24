@@ -76,8 +76,27 @@ async function login() {
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(3000);
 
-  const pageUrl = page.url();
+  let pageUrl = page.url();
   logger.info(`로그인 페이지 URL: ${pageUrl}`);
+
+  // missinstall 페이지 우회 (보안 프로그램 미설치 안내)
+  if (pageUrl.includes('missinstall') || pageUrl.includes('0003_01')) {
+    logger.info('보안 프로그램 미설치 페이지 감지, 로그인 페이지로 직접 이동...');
+    await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(2000);
+    pageUrl = page.url();
+
+    if (pageUrl.includes('missinstall') || pageUrl.includes('0003_01')) {
+      // 쿠키로 우회 시도
+      await page.context().addCookies([{
+        name: 'missinstall', value: 'Y', domain: 'ai.serp.co.kr', path: '/',
+      }]);
+      await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForTimeout(2000);
+      pageUrl = page.url();
+      logger.info(`쿠키 우회 후 URL: ${pageUrl}`);
+    }
+  }
 
   if (!pageUrl.includes('0002_01')) {
     const hasContent = await page.locator('.toolbar2, .co_name, .gnb, .lnb, #main_iframe').count();
@@ -107,18 +126,21 @@ async function login() {
     throw new Error('로그인 폼을 찾을 수 없습니다. 페이지 구조를 확인하세요.');
   }
 
-  const idField = page.locator('input[type="text"], input[type="email"]').first();
-  await idField.click();
-  await page.waitForTimeout(200);
-  await idField.fill('');
-  await idField.fill(userId);
-  await page.waitForTimeout(300);
-
-  await pwField.click();
-  await page.waitForTimeout(500);
-  await pwField.fill('');
-  await page.waitForTimeout(200);
-  await page.keyboard.type(userPw, { delay: 50 });
+  // evaluate로 직접 값 주입 (팝업/오버레이 방해 회피)
+  await page.evaluate(({ id, pw }) => {
+    const idEl = document.querySelector('input[type="text"], input[type="email"]');
+    const pwEl = document.querySelector('input[type="password"]');
+    if (idEl) {
+      idEl.value = id;
+      idEl.dispatchEvent(new Event('input', { bubbles: true }));
+      idEl.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (pwEl) {
+      pwEl.value = pw;
+      pwEl.dispatchEvent(new Event('input', { bubbles: true }));
+      pwEl.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }, { id: userId, pw: userPw });
   await page.waitForTimeout(500);
 
   logger.info('로그인 버튼 클릭 시도...');
