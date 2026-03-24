@@ -233,7 +233,11 @@ function compareSalesData(sheetData, gyeongliData) {
           diffs,
         };
 
-        if (diffs.length > 0) {
+        // 금액(공급가, 단가, 세액, 수량)이 모두 일치하면 matched. 날짜만 다를 땐 일치로 간주
+        const hasAmountDiff = diffs.some(d =>
+          !d.startsWith('날짜:') && !d.includes('날짜')
+        );
+        if (hasAmountDiff) {
           entry._status = 'mismatch';
           results.mismatch.push(entry);
         } else {

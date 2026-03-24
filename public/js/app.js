@@ -103,6 +103,12 @@ function setLastMonth() {
   document.getElementById('dateEnd').value = `${y}-${m}-${String(new Date(y, prev.getMonth() + 1, 0).getDate()).padStart(2, '0')}`;
 }
 
+function setThisYear() {
+  const y = new Date().getFullYear();
+  document.getElementById('dateStart').value = `${y}-01-01`;
+  document.getElementById('dateEnd').value = `${y}-12-31`;
+}
+
 function getDateParams() {
   const s = document.getElementById('dateStart').value;
   const e = document.getElementById('dateEnd').value;
@@ -441,6 +447,14 @@ function renderDeposits(data) {
   }
 
   const totalDeposit = data.deposits.reduce((s, d) => s + (d.amount || 0), 0);
+  const basic = data.matchResults?.basic;
+  const matchedKeys = new Set();
+  if (basic?.matched) {
+    for (const m of basic.matched) {
+      matchedKeys.add(`${m.date}|${m.amount}|${m.client}`);
+    }
+  }
+  const unmatchedCount = basic ? (basic.unmatched?.length ?? 0) : data.deposits.length;
 
   let html = `
     <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap">
@@ -452,9 +466,17 @@ function renderDeposits(data) {
         <div class="stat-label">입금 합계</div>
         <div class="stat-value" style="font-size:22px;color:#27AE60">${formatNumber(totalDeposit)}원</div>
       </div>
+      <div class="stat-card" style="flex:1;min-width:200px">
+        <div class="stat-label">미매칭 건</div>
+        <div class="stat-value" style="font-size:22px;color:#E74C3C">${unmatchedCount}건</div>
+      </div>
+    </div>
+    <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="lf-btn lf-btn-sm deposit-filter active" data-filter="all" onclick="filterDeposits('all')">전체</button>
+      <button class="lf-btn lf-btn-sm deposit-filter" data-filter="unmatched" onclick="filterDeposits('unmatched')">매칭 안된 건만 (${unmatchedCount})</button>
     </div>
     <div style="overflow-x:auto">
-    <table class="data-table" style="margin-bottom:24px">
+    <table class="data-table" style="margin-bottom:24px" id="depositsTable">
       <thead><tr>
         <th>입금일</th><th>적요 / 거래처</th><th class="num">입금액</th><th>시간</th><th>은행 / 계좌</th><th>매칭 상태</th>
       </tr></thead><tbody>`;
@@ -463,14 +485,26 @@ function renderDeposits(data) {
     const clientName = d.client || '-';
     const time = d.time || '';
     const bankAccount = [d.bank, d.account].filter(Boolean).join(' / ') || d.detail || '-';
+    const isMatched = matchedKeys.has(`${d.date}|${d.amount}|${d.client}`);
+    const matchedTo = basic?.matched?.find(m => m.date === d.date && m.amount === d.amount && m.client === d.client)?.matchedTo;
+    const rowClass = isMatched ? 'deposit-row-matched' : 'deposit-row-unmatched';
+    const badge = isMatched
+      ? `<span class="lf-badge lf-badge-success">매칭됨</span>${matchedTo ? ` <span style="font-size:11px;color:var(--lf-text-light)">→ ${matchedTo}</span>` : ''
+      : '<span class="lf-badge lf-badge-warning">미매칭</span>';
+    const clientCell = isMatched
+      ? clientName
+      : `<strong style="color:#2C3E50">${clientName}</strong>`;
+    const amountCell = isMatched
+      ? formatNumber(d.amount)
+      : `<strong>${formatNumber(d.amount)}</strong>`;
 
-    html += `<tr>
+    html += `<tr class="deposit-table-row ${rowClass}" data-matched="${isMatched}">
       <td>${d.date || '-'}</td>
-      <td><strong>${clientName}</strong></td>
-      <td class="num" style="color:#27AE60;font-weight:700">${formatNumber(d.amount)}</td>
+      <td>${clientCell}</td>
+      <td class="num" style="color:#27AE60;font-weight:700">${amountCell}</td>
       <td style="font-size:12px;color:var(--lf-text-light)">${time}</td>
       <td style="font-size:12px;color:var(--lf-text-light)">${bankAccount}</td>
-      <td><span class="lf-badge lf-badge-warning">미매칭</span></td>
+      <td>${badge}</td>
     </tr>`;
   }
 
@@ -484,6 +518,19 @@ function renderDeposits(data) {
   }
 
   el.innerHTML = html;
+}
+
+function filterDeposits(filter) {
+  document.querySelectorAll('.deposit-filter').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.deposit-filter[data-filter="${filter}"]`)?.classList.add('active');
+  document.querySelectorAll('.deposit-table-row').forEach(row => {
+    const isMatched = row.dataset.matched === 'true';
+    if (filter === 'all') {
+      row.style.display = '';
+    } else if (filter === 'unmatched') {
+      row.style.display = isMatched ? 'none' : '';
+    }
+  });
 }
 
 async function runDepositMatch() {

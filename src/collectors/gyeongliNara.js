@@ -611,18 +611,24 @@ async function openClientPopupAndExtract(frame, client) {
   return data;
 }
 
-async function collectDepositData() {
+async function collectDepositData(options = {}) {
   if (isBusy) throw new Error('이미 수집 중입니다. 잠시 후 다시 시도하세요.');
   isBusy = true;
+
+  const { startDate, endDate } = options;
 
   try {
     await ensureBrowser();
     await login();
 
-    logger.info('입출내역조회 페이지 이동...');
+    logger.info(`입출내역조회 페이지 이동... ${startDate ? `(${startDate} ~ ${endDate})` : '(기본 기간)'}`);
     const frame = await navigateToMenu('s3120');
 
-    await page.waitForTimeout(2000);
+    if (startDate || endDate) {
+      await setDateRange(frame, startDate, endDate);
+    } else {
+      await page.waitForTimeout(2000);
+    }
 
     const deposits = await frame.evaluate(() => {
       const results = [];
@@ -677,7 +683,11 @@ async function collectDepositData() {
     if (deposits.length === 0) {
       logger.info('입금내역 수납확인 페이지로 대체 시도...');
       const confirmFrame = await navigateToMenu('s3130');
-      await page.waitForTimeout(2000);
+      if (startDate || endDate) {
+        await setDateRange(confirmFrame, startDate, endDate);
+      } else {
+        await page.waitForTimeout(2000);
+      }
 
       const confirmDeposits = await confirmFrame.evaluate(() => {
         const results = [];

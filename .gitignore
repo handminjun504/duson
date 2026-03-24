@@ -7,3 +7,5 @@ read_excel.js
 read_excel_all.js
 .browser-data/
 .appstate.json
+.cursor/
+*.xlsx

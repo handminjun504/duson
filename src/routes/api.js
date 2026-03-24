@@ -77,7 +77,7 @@ router.post('/collect/gyeongli', async (req, res) => {
     const { startDate, endDate } = req.body || {};
     const sales = await gyeongliNara.collectSalesData({ startDate, endDate });
     appState.gyeongliSales = sales;
-    const deposits = await gyeongliNara.collectDepositData();
+    const deposits = await gyeongliNara.collectDepositData({ startDate, endDate });
     appState.gyeongliDeposits = deposits;
     saveState();
     res.json({
@@ -197,9 +197,14 @@ router.get('/clients/:name/transactions', (req, res) => {
 });
 
 router.get('/deposits', (req, res) => {
+  let matchResults = appState.depositMatch;
+  if (!matchResults && appState.gyeongliDeposits?.length && appState.gyeongliSales?.length) {
+    const basicMatch = matcher.matchDeposits(appState.gyeongliSales, appState.gyeongliDeposits);
+    matchResults = { basic: basicMatch, gemini: null };
+  }
   res.json({
     deposits: appState.gyeongliDeposits || [],
-    matchResults: appState.depositMatch,
+    matchResults,
   });
 });
 
