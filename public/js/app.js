@@ -489,7 +489,7 @@ function renderDeposits(data) {
     const matchedTo = basic?.matched?.find(m => m.date === d.date && m.amount === d.amount && m.client === d.client)?.matchedTo;
     const rowClass = isMatched ? 'deposit-row-matched' : 'deposit-row-unmatched';
     const badge = isMatched
-      ? `<span class="lf-badge lf-badge-success">매칭됨</span>${matchedTo ? ` <span style="font-size:11px;color:var(--lf-text-light)">→ ${matchedTo}</span>` : ''
+      ? `<span class="lf-badge lf-badge-success">매칭됨</span>${matchedTo ? ` <span style="font-size:11px;color:var(--lf-text-light)">&rarr; ${matchedTo}</span>` : ''}`
       : '<span class="lf-badge lf-badge-warning">미매칭</span>';
     const clientCell = isMatched
       ? clientName
