@@ -125,19 +125,32 @@ async function fetchSalesData(options = {}) {
   const allData = [];
 
   for (const sheetName of sheetNames) {
-    const [mainRes, noteRes] = await Promise.all([
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `'${sheetName}'!A1:T5000`,
-      }),
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `'${sheetName}'!AE1:AE5000`,
-      }),
-    ]);
+    const targetSheet = targetSheets.find(s => s.properties.title === sheetName);
+    const maxRow = targetSheet?.properties?.gridProperties?.rowCount || 5000;
+    const maxCol = targetSheet?.properties?.gridProperties?.columnCount || 20;
+    const lastCol = String.fromCharCode(64 + Math.min(maxCol, 26));
+    const mainRange = `'${sheetName}'!A1:${lastCol}${maxRow}`;
+    logger.info(`시트 범위: ${mainRange} (${maxRow}행 x ${maxCol}열)`);
+
+    const mainRes = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: mainRange,
+    });
+
+    let noteRows = [];
+    if (maxCol >= 31) {
+      try {
+        const noteRes = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `'${sheetName}'!AE1:AE${maxRow}`,
+        });
+        noteRows = noteRes.data.values || [];
+      } catch (err) {
+        logger.warn(`AE열 비고 조회 실패 (무시): ${err.message}`);
+      }
+    }
 
     const rows = mainRes.data.values || [];
-    const noteRows = noteRes.data.values || [];
     if (rows.length < 3) continue;
 
     const headerIdx = findHeaderRow(rows);
