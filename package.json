@@ -1,7 +1,7 @@
 {
   "name": "duson",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -17,7 +17,6 @@
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "googleapis": "^171.4.0",
-    "playwright": "^1.58.2",
-    "xlsx": "^0.18.5"
+    "playwright": "^1.58.2"
   }
 }

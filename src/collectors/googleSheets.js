@@ -3,8 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
 
-let cachedData = null;
-
 const HEADER_KEYWORDS = ['거래일자', '품목명', '수량', '단가', '거래처명'];
 
 const COL_ALIASES = {
@@ -241,12 +239,7 @@ async function fetchSalesData(options = {}) {
   }
 
   logger.info(`Google Sheets에서 총 ${allData.length}건 매출 데이터 수집 완료${hasFilter ? ` (${startDate} ~ ${endDate})` : ''}`);
-  cachedData = allData;
   return allData;
 }
 
-function getCachedData() {
-  return cachedData;
-}
-
-module.exports = { fetchSalesData, getCachedData };
+module.exports = { fetchSalesData };

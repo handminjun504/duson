@@ -66,6 +66,21 @@ JSON 형식으로 응답해주세요:
   }
 }
 
+function truncateForGemini(data, maxItems = 50) {
+  if (!Array.isArray(data)) return data;
+  return data.slice(0, maxItems);
+}
+
+function summarizeSales(salesByClient) {
+  if (!Array.isArray(salesByClient)) return salesByClient;
+  return salesByClient.map(c => ({
+    client: c.client,
+    itemCount: c.items?.length || 0,
+    totalAmount: (c.items || []).reduce((s, i) => s + (i.total || 0), 0),
+    prevBalance: c.prevBalance || 0,
+  }));
+}
+
 async function suggestDepositMatches(deposits, salesByClient) {
   if (!genAI) {
     return { available: false, message: 'Gemini API 키 미설정' };
@@ -74,13 +89,18 @@ async function suggestDepositMatches(deposits, salesByClient) {
   try {
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
+    const safeDeposits = truncateForGemini(deposits, 30).map(d => ({
+      date: d.date, client: d.client, amount: d.amount, bank: d.bank,
+    }));
+    const safeSales = summarizeSales(salesByClient);
+
     const prompt = `회계 담당자입니다. 아래 입금 내역과 거래처별 미수금을 비교하여 매칭 제안을 해주세요.
 
 ## 입금 내역
-${JSON.stringify(deposits, null, 2)}
+${JSON.stringify(safeDeposits, null, 2)}
 
-## 거래처별 매출 데이터
-${JSON.stringify(salesByClient, null, 2)}
+## 거래처별 매출 요약
+${JSON.stringify(safeSales, null, 2)}
 
 각 입금에 대해 어떤 매출 건과 매칭될 수 있는지 제안해주세요.
 개인통장 이체건이 있을 수 있으니 금액이 정확히 일치하지 않을 수 있습니다.
@@ -120,10 +140,24 @@ async function generateMonthlyReport(allData) {
   try {
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
+    const safeData = {
+      salesCount: allData.sales?.length || 0,
+      totalSales: (allData.sales || []).reduce((s, c) =>
+        s + (c.items || []).reduce((si, i) => si + (i.total || 0), 0), 0),
+      clientSummary: (allData.sales || []).slice(0, 20).map(c => ({
+        client: c.client,
+        total: (c.items || []).reduce((s, i) => s + (i.total || 0), 0),
+        prevBalance: c.prevBalance || 0,
+      })),
+      depositCount: allData.deposits?.length || 0,
+      totalDeposit: (allData.deposits || []).reduce((s, d) => s + (d.amount || 0), 0),
+      comparisonSummary: allData.comparison?.summary || null,
+    };
+
     const prompt = `회계 담당자를 위한 월간 매출/미수금 요약 리포트를 작성해주세요.
 
 ## 데이터
-${JSON.stringify(allData, null, 2)}
+${JSON.stringify(safeData, null, 2)}
 
 다음을 포함해주세요:
 1. 이번 달 총매출 현황

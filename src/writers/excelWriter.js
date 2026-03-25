@@ -22,13 +22,6 @@ const DATA_FONT = { name: '맑은 고딕', size: 10 };
 const TITLE_FONT = { name: '맑은 고딕', size: 16, bold: true };
 const NUM_FMT = '#,##0';
 
-function applyBorder(row, colStart, colEnd) {
-  for (let c = colStart; c <= colEnd; c++) {
-    const cell = row.getCell(c);
-    cell.border = THIN_BORDER;
-  }
-}
-
 function setCell(ws, row, col, value, opts = {}) {
   const cell = ws.getRow(row).getCell(col);
   cell.value = value;
@@ -114,6 +107,13 @@ async function generateLedger(clientsData, options = {}) {
     let totalSupply = 0;
     let totalVat = 0;
     let totalAmount = 0;
+
+    if (items.length === 0) {
+      setCell(ws, r, 1, client, { alignment: { horizontal: 'left' } });
+      setCell(ws, r, 2, '(거래 없음)', { alignment: { horizontal: 'center' } });
+      for (let c = 3; c <= TOTAL_COLS; c++) ws.getRow(r).getCell(c).border = THIN_BORDER;
+      r++;
+    }
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];

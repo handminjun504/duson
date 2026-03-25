@@ -42,6 +42,15 @@ process.on('uncaughtException', (err) => {
   logger.error('Uncaught Exception', { error: err.message, stack: err.stack });
 });
 
+const { closeBrowser } = require('./src/collectors/gyeongliNara');
+async function gracefulShutdown(signal) {
+  logger.info(`${signal} 수신 — 서버 종료 시작`);
+  try { await closeBrowser(); } catch { /* ignore */ }
+  process.exit(0);
+}
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
 initGemini();
 
 app.listen(PORT, HOST, () => {

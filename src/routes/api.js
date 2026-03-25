@@ -60,9 +60,19 @@ router.get('/status', (req, res) => {
   });
 });
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function validateDates(startDate, endDate) {
+  if (startDate && !DATE_RE.test(startDate)) return '시작 날짜 형식이 잘못되었습니다 (YYYY-MM-DD)';
+  if (endDate && !DATE_RE.test(endDate)) return '종료 날짜 형식이 잘못되었습니다 (YYYY-MM-DD)';
+  if (startDate && endDate && startDate > endDate) return '시작 날짜가 종료 날짜보다 큽니다';
+  return null;
+}
+
 router.post('/collect/sheets', async (req, res) => {
   try {
     const { startDate, endDate } = req.body || {};
+    const dateErr = validateDates(startDate, endDate);
+    if (dateErr) return res.status(400).json({ success: false, error: dateErr });
     appState.sheetData = await googleSheets.fetchSalesData({ startDate, endDate });
     saveState();
     res.json({ success: true, count: appState.sheetData.length });
@@ -75,6 +85,8 @@ router.post('/collect/sheets', async (req, res) => {
 router.post('/collect/gyeongli', async (req, res) => {
   try {
     const { startDate, endDate } = req.body || {};
+    const dateErr = validateDates(startDate, endDate);
+    if (dateErr) return res.status(400).json({ success: false, error: dateErr });
     const sales = await gyeongliNara.collectSalesData({ startDate, endDate });
     appState.gyeongliSales = sales;
     const deposits = await gyeongliNara.collectDepositData({ startDate, endDate });
@@ -95,7 +107,7 @@ router.post('/collect/gyeongli', async (req, res) => {
   }
 });
 
-router.get('/compare', (req, res) => {
+router.post('/compare', (req, res) => {
   if (!appState.sheetData || !appState.gyeongliSales) {
     return res.status(400).json({
       error: '양쪽 데이터를 먼저 수집하세요 (Google Sheet + 경리나라)',
@@ -106,6 +118,7 @@ router.get('/compare', (req, res) => {
   saveState();
   res.json(appState.comparison);
 });
+
 
 router.post('/analyze', async (req, res) => {
   try {
