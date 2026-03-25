@@ -86,6 +86,13 @@ async function login() {
     }
   }
 
+  // alert 팝업 캡처 (로그인 실패 메시지 등)
+  page.on('dialog', async (dialog) => {
+    logger.info(`[DIALOG] ${dialog.type()}: ${dialog.message()}`);
+    await page.evaluate((msg) => { window.__lastAlert = msg; }, dialog.message());
+    await dialog.dismiss().catch(() => null);
+  });
+
   // missinstall 쿠키를 미리 설정하여 리다이렉트 방지
   await page.context().addCookies([
     { name: 'missinstall', value: 'Y', domain: new URL(BASE_URL).hostname, path: '/' },
@@ -188,54 +195,91 @@ async function login() {
     throw new Error(`로그인 폼을 찾을 수 없습니다. URL: ${debugInfo.url}`);
   }
 
-  // evaluate로 직접 값 주입 (팝업/오버레이 방해 회피)
-  await page.evaluate(({ id, pw }) => {
-    const idEl = document.querySelector('input[type="text"], input[type="email"]');
-    const pwEl = document.querySelector('input[type="password"]');
-    if (idEl) {
-      idEl.value = id;
-      idEl.dispatchEvent(new Event('input', { bubbles: true }));
-      idEl.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    if (pwEl) {
-      pwEl.value = pw;
-      pwEl.dispatchEvent(new Event('input', { bubbles: true }));
-      pwEl.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  }, { id: userId, pw: userPw });
+  // ID 필드 찾기: name/id 속성 우선, 그 다음 type="text"
+  const idField = page.locator('input[name="userId"], input[name="user_id"], input[name="loginId"], input[id="userId"], input[id="user_id"], input[id="loginId"]').first();
+  const idFieldCount = await idField.count();
+  const idSelector = idFieldCount > 0
+    ? idField
+    : page.locator('input[type="text"], input[type="email"]').first();
+
+  // 기존 값 클리어 후 Playwright type()으로 실제 키 입력 시뮬레이션
+  await idSelector.click({ force: true }).catch(() => null);
+  await idSelector.fill('');
+  await idSelector.type(userId, { delay: 50 });
+  logger.info('ID 입력 완료');
+
+  await pwField.click({ force: true }).catch(() => null);
+  await pwField.fill('');
+  await pwField.type(userPw, { delay: 50 });
+  logger.info('PW 입력 완료');
+
   await page.waitForTimeout(500);
 
-  logger.info('로그인 버튼 클릭 시도...');
-  const loginClicked = await page.evaluate(() => {
-    const btns = document.querySelectorAll('button, a, input[type="submit"], input[type="button"]');
-    for (const btn of btns) {
-      const txt = (btn.textContent || btn.value || '').trim();
-      if (txt.includes('로그인') || txt.includes('LOGIN') || txt.includes('Log in')) {
-        btn.click();
-        return txt;
-      }
-    }
-    const form = document.querySelector('form');
-    if (form) { form.submit(); return 'form.submit'; }
-    return null;
+  // 입력값 검증
+  const filledValues = await page.evaluate(() => {
+    const idEl = document.querySelector('input[type="text"], input[type="email"]');
+    const pwEl = document.querySelector('input[type="password"]');
+    return {
+      idLen: idEl?.value?.length || 0,
+      pwLen: pwEl?.value?.length || 0,
+    };
   });
-  logger.info(`로그인 클릭: ${loginClicked}`);
+  logger.info(`입력 검증 - ID길이: ${filledValues.idLen}, PW길이: ${filledValues.pwLen}`);
 
-  await page.waitForTimeout(6000);
+  logger.info('로그인 버튼 클릭 시도...');
+  // 1차: Playwright locator로 로그인 버튼 클릭
+  const loginBtn = page.locator('button:has-text("로그인"), a:has-text("로그인"), input[value*="로그인"], button:has-text("LOGIN"), a:has-text("LOGIN")').first();
+  const loginBtnCount = await loginBtn.count();
+  if (loginBtnCount > 0) {
+    await loginBtn.click({ force: true });
+    logger.info('로그인 버튼 클릭 (Playwright locator)');
+  } else {
+    // 2차: evaluate 폴백
+    const loginClicked = await page.evaluate(() => {
+      const btns = document.querySelectorAll('button, a, input[type="submit"], input[type="button"]');
+      for (const btn of btns) {
+        const txt = (btn.textContent || btn.value || '').trim();
+        if (txt.includes('로그인') || txt.includes('LOGIN') || txt.includes('Log in')) {
+          btn.click();
+          return txt;
+        }
+      }
+      const form = document.querySelector('form');
+      if (form) { form.submit(); return 'form.submit'; }
+      return null;
+    });
+    logger.info(`로그인 클릭 (evaluate): ${loginClicked}`);
+  }
+
+  // 로그인 후 페이지 전환 대기
+  await Promise.race([
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => null),
+    page.waitForTimeout(8000),
+  ]);
 
   const afterUrl = page.url();
   logger.info(`로그인 후 URL: ${afterUrl}`);
 
+  // alert 팝업 처리 (잘못된 비밀번호 등)
+  const alertText = await page.evaluate(() => {
+    return window.__lastAlert || null;
+  }).catch(() => null);
+
   const hasToolbar = await page.locator('.toolbar2, .co_name, .gnb, .lnb, #main_iframe').count();
-  if (hasToolbar > 0) {
+  const hasFrame = page.frames().length > 1;
+
+  if (hasToolbar > 0 || hasFrame) {
     isLoggedIn = true;
     logger.info('경리나라 로그인 성공');
-  } else if (!afterUrl.includes('0002_01')) {
+  } else if (!afterUrl.includes('0002_01') && afterUrl.includes('serp.co.kr')) {
     isLoggedIn = true;
     logger.info('경리나라 로그인 성공 (URL 기반 확인)');
   } else {
     const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '');
-    logger.error(`로그인 실패. 페이지 내용: ${bodyText}`);
+    const pageInputs = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('input')).map(i => `${i.type}:${i.name||i.id}=${i.value?.substring(0,3)}***`).join(', ')
+    );
+    logger.error(`로그인 실패 디버그`, { afterUrl, bodyText, pageInputs, alertText, framesCount: page.frames().length });
     throw new Error('경리나라 로그인 실패. 아이디/비밀번호를 확인하세요.');
   }
 }
