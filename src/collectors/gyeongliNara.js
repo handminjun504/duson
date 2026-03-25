@@ -44,6 +44,13 @@ async function ensureBrowser() {
   const pages = context.pages();
   page = pages.length > 0 ? pages[0] : await context.newPage();
   page.setDefaultTimeout(30000);
+
+  // missinstall 리다이렉트를 네트워크 레벨에서 차단
+  await page.route('**/wserp_0003_01.act**', (route) => {
+    logger.info('[ROUTE] missinstall 리다이렉트 차단');
+    route.abort('blockedbyclient');
+  });
+
   isLoggedIn = false;
   logger.info('Playwright 브라우저 실행됨 (영구 컨텍스트)');
 }
@@ -73,32 +80,65 @@ async function login() {
     }
   }
 
+  // missinstall 쿠키를 미리 설정하여 리다이렉트 방지
+  await page.context().addCookies([
+    { name: 'missinstall', value: 'Y', domain: new URL(BASE_URL).hostname, path: '/' },
+  ]);
+
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(3000);
 
   let pageUrl = page.url();
   logger.info(`로그인 페이지 URL: ${pageUrl}`);
 
-  // missinstall 페이지 우회 (보안 프로그램 미설치 안내)
   if (pageUrl.includes('missinstall') || pageUrl.includes('0003_01')) {
-    logger.info('보안 프로그램 미설치 페이지 감지, 로그인 페이지로 직접 이동...');
-    await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(2000);
+    logger.warn('missinstall 페이지 감지, 우회 시도...');
+
+    // 1) 페이지 내 건너뛰기/다음에 설치/확인 버튼 클릭 시도
+    const skipClicked = await page.evaluate(() => {
+      const all = document.querySelectorAll('a, button, input[type="button"], span');
+      for (const el of all) {
+        const txt = (el.textContent || el.value || '').trim();
+        if (/건너뛰|다음에|나중에|확인|skip|continue|close/i.test(txt)) {
+          el.click();
+          return txt;
+        }
+      }
+      const links = document.querySelectorAll('a[href]');
+      for (const a of links) {
+        if (a.href.includes('0002_01') || a.href.includes('login')) {
+          a.click();
+          return a.href;
+        }
+      }
+      return null;
+    });
+    logger.info(`missinstall 우회 클릭: ${skipClicked}`);
+    await page.waitForTimeout(3000);
     pageUrl = page.url();
 
+    // 2) 아직 missinstall이면 route intercept로 강제 이동
     if (pageUrl.includes('missinstall') || pageUrl.includes('0003_01')) {
-      // 쿠키로 우회 시도
-      await page.context().addCookies([{
-        name: 'missinstall', value: 'Y', domain: 'ai.serp.co.kr', path: '/',
-      }]);
+      logger.info('route intercept로 로그인 페이지 강제 이동');
+      await page.route('**/wserp_0003_01**', route => route.abort());
       await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(3000);
       pageUrl = page.url();
-      logger.info(`쿠키 우회 후 URL: ${pageUrl}`);
+      await page.unroute('**/wserp_0003_01**');
     }
+
+    // 3) 아직 안 되면 JavaScript로 location 강제 변경
+    if (pageUrl.includes('missinstall') || pageUrl.includes('0003_01')) {
+      logger.info('JavaScript location으로 강제 이동');
+      await page.evaluate((url) => { window.location.href = url; }, loginUrl);
+      await page.waitForTimeout(5000);
+      pageUrl = page.url();
+    }
+
+    logger.info(`missinstall 우회 후 URL: ${pageUrl}`);
   }
 
-  if (!pageUrl.includes('0002_01')) {
+  if (!pageUrl.includes('0002_01') && !pageUrl.includes('missinstall') && !pageUrl.includes('0003_01')) {
     const hasContent = await page.locator('.toolbar2, .co_name, .gnb, .lnb, #main_iframe').count();
     if (hasContent > 0) {
       isLoggedIn = true;
@@ -107,11 +147,21 @@ async function login() {
     }
   }
 
+  // 보안 플러그인 오버레이/팝업 강제 제거
   await page.evaluate(() => {
-    const dialogs = document.querySelectorAll('[role="dialog"], .modal, .popup');
-    dialogs.forEach(d => {
-      const allowBtn = d.querySelector('button');
-      if (allowBtn) allowBtn.click();
+    document.querySelectorAll('[role="dialog"], .modal, .popup, .layer_pop, .dim, .dimmed').forEach(d => {
+      const btn = d.querySelector('button, .close, .btn_close, [class*="close"]');
+      if (btn) btn.click();
+      else d.remove();
+    });
+    // pointer-events를 가로채는 전체화면 오버레이 제거
+    document.querySelectorAll('div').forEach(el => {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      if (rect.width > window.innerWidth * 0.5 && rect.height > window.innerHeight * 0.5
+          && style.position === 'fixed' && parseInt(style.zIndex || '0') > 100) {
+        el.remove();
+      }
     });
   }).catch(() => null);
   await page.waitForTimeout(500);
@@ -121,9 +171,15 @@ async function login() {
   logger.info(`비밀번호 필드 존재: ${hasPwField > 0}`);
 
   if (hasPwField === 0) {
-    const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 300) || '');
-    logger.info(`페이지 내용: ${bodyText}`);
-    throw new Error('로그인 폼을 찾을 수 없습니다. 페이지 구조를 확인하세요.');
+    const debugInfo = await page.evaluate(() => ({
+      url: window.location.href,
+      title: document.title,
+      body: document.body?.innerText?.substring(0, 500) || '',
+      inputs: Array.from(document.querySelectorAll('input')).map(i => `${i.type}:${i.name||i.id}`).join(', '),
+      links: Array.from(document.querySelectorAll('a[href]')).slice(0, 5).map(a => a.href).join(', '),
+    }));
+    logger.error('로그인 폼 미발견 디버그 정보', debugInfo);
+    throw new Error(`로그인 폼을 찾을 수 없습니다. URL: ${debugInfo.url}`);
   }
 
   // evaluate로 직접 값 주입 (팝업/오버레이 방해 회피)
