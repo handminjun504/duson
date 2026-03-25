@@ -323,6 +323,34 @@ async function navigateToMenu(menuId) {
   return page.mainFrame();
 }
 
+async function scrollToLoadAll(target, label = '') {
+  const maxAttempts = 10;
+  let prevHeight = 0;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const currentHeight = await target.evaluate(() => {
+      const scrollEl = document.scrollingElement || document.documentElement || document.body;
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+      return scrollEl.scrollHeight;
+    }).catch(() => 0);
+
+    if (currentHeight === 0) break;
+
+    if (attempt > 0 && currentHeight === prevHeight) {
+      logger.info(`${label}: 스크롤 완료 (${attempt}회, 높이 ${currentHeight}px)`);
+      break;
+    }
+
+    prevHeight = currentHeight;
+    await page.waitForTimeout(1500);
+  }
+
+  await target.evaluate(() => {
+    const scrollEl = document.scrollingElement || document.documentElement || document.body;
+    scrollEl.scrollTop = 0;
+  }).catch(() => null);
+}
+
 async function setDateRange(frame, startDate, endDate) {
   if (!startDate && !endDate) return;
 
@@ -543,6 +571,8 @@ async function collectSalesData(options = {}) {
 
     await setDateRange(frame, startDate, endDate);
 
+    await scrollToLoadAll(frame, '거래처 목록');
+
     const clientLinks = await frame.evaluate(() => {
       const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
       return Array.from(links)
@@ -625,6 +655,8 @@ async function openClientPopupAndExtract(frame, client) {
 
   await popup.waitForLoadState('domcontentloaded');
   await popup.waitForTimeout(2000);
+
+  await scrollToLoadAll(popup, `팝업(${client.name})`);
 
   const data = await popup.evaluate(() => {
     const result = {
