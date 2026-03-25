@@ -34,6 +34,13 @@ function formatNumber(n) {
   return Number(n).toLocaleString('ko-KR');
 }
 
+function esc(str) {
+  if (!str) return '';
+  const d = document.createElement('div');
+  d.textContent = String(str);
+  return d.innerHTML;
+}
+
 async function apiCall(method, endpoint, body = null) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
@@ -142,7 +149,7 @@ async function collectGyeongli() {
 async function runCompare() {
   showLoading('매출 대조 실행 중...');
   try {
-    const data = await apiCall('GET', '/compare');
+    const data = await apiCall('POST', '/compare');
     renderCompareResult(data);
     toast('매출 대조 완료', 'info');
     addLog(`<span class="lf-badge lf-badge-primary">대조</span> Google Sheet ${data.summary?.sheetCount || 0}건 vs 경리나라 ${data.summary?.gyeongliCount || 0}건`);
@@ -218,7 +225,10 @@ function renderCompareResult(data) {
   for (const item of allItems) {
     let badge = '';
     let rowStyle = '';
-    if (item._cat === 'matched') { badge = '<span class="lf-badge lf-badge-success">일치</span>'; }
+    if (item._cat === 'matched') {
+      badge = '<span class="lf-badge lf-badge-success">일치</span>';
+      if (item._note) badge += ` <span style="font-size:10px;color:var(--lf-text-light)">${esc(item._note)}</span>`;
+    }
     else if (item._cat === 'mismatch') {
       const level = item._matchLevel || '';
       badge = level
@@ -240,9 +250,9 @@ function renderCompareResult(data) {
 
     html += `<tr class="compare-row" data-cat="${item._cat}" style="${rowStyle}">
       <td>${badge}</td>
-      <td style="white-space:nowrap">${dateDisplay}</td>
-      <td>${item.client || ''}</td>
-      <td>${item.product || item.productName || ''}</td>
+      <td style="white-space:nowrap">${esc(dateDisplay)}</td>
+      <td>${esc(item.client)}</td>
+      <td>${esc(item.product || item.productName)}</td>
       <td class="num">${formatNumber(item.qty)}</td>
       <td class="num">${formatNumber(ss)}</td>
       <td class="num">${formatNumber(gs)}</td>
@@ -290,13 +300,18 @@ async function runAnalysis() {
 let allClientsData = [];
 let allClientsDetail = {};
 
+let clientsLoading = false;
 async function loadClients() {
+  if (clientsLoading) return;
+  clientsLoading = true;
   try {
     const data = await apiCall('GET', '/clients');
     allClientsData = data.clients || [];
 
+    // 상위 10개만 상세 조회 (나머지는 클릭 시 로드)
+    const top = allClientsData.slice(0, 10);
     const details = await Promise.all(
-      allClientsData.map(c =>
+      top.map(c =>
         apiCall('GET', `/clients/${encodeURIComponent(c.name)}/transactions`).catch(() => null)
       )
     );
@@ -306,6 +321,8 @@ async function loadClients() {
     renderAllClients(allClientsData);
   } catch (err) {
     toast(`거래처 목록 로드 실패: ${err.message}`, 'error');
+  } finally {
+    clientsLoading = false;
   }
 }
 
@@ -329,10 +346,33 @@ function renderAllClients(clients) {
   let html = '';
   for (const c of clients) {
     const data = allClientsDetail[c.name];
-    if (!data) continue;
-    html += renderClientLedger(data);
+    if (data) {
+      html += renderClientLedger(data);
+    } else {
+      html += `<div class="ledger-card" id="client-${btoa(encodeURIComponent(c.name))}">
+        <div class="ledger-header" style="cursor:pointer" onclick="loadClientDetail('${esc(c.name)}')">
+          <div class="ledger-header-name">${esc(c.name)}</div>
+          <div class="ledger-header-stats">
+            <span class="ledger-stat">품목 <strong>${c.itemCount}</strong>건</span>
+            <span class="ledger-stat">매출합계 <strong style="color:#4A8CDB">${formatNumber(c.totalAmount)}</strong></span>
+            <span style="color:var(--lf-text-light);font-size:12px">클릭하여 상세 보기</span>
+          </div>
+        </div>
+      </div>`;
+    }
   }
   el.innerHTML = html;
+}
+
+async function loadClientDetail(name) {
+  try {
+    const data = await apiCall('GET', `/clients/${encodeURIComponent(name)}/transactions`);
+    allClientsDetail[name] = data;
+    const card = document.getElementById(`client-${btoa(encodeURIComponent(name))}`);
+    if (card) card.outerHTML = renderClientLedger(data);
+  } catch (err) {
+    toast(`${name} 상세 로드 실패: ${err.message}`, 'error');
+  }
 }
 
 function renderClientLedger(data) {
@@ -509,6 +549,25 @@ function renderDeposits(data) {
   }
 
   html += '</tbody></table></div>';
+
+  // 미매칭 건 요약 카드
+  const unmatchedDeposits = data.deposits.filter(d => !matchedKeys.has(`${d.date}|${d.amount}|${d.client}`));
+  if (unmatchedDeposits.length > 0) {
+    html += `<div class="detail-panel" style="margin-top:20px;border-left:4px solid #E74C3C">
+      <h4 style="margin:0 0 12px;color:#E74C3C"><i class="ri-error-warning-line"></i> 미매칭 입금 내역 (${unmatchedDeposits.length}건)</h4>
+      <table class="data-table"><thead><tr>
+        <th>입금일</th><th>거래처</th><th class="num">입금액</th><th>은행 / 계좌</th>
+      </tr></thead><tbody>`;
+    for (const d of unmatchedDeposits) {
+      html += `<tr style="background:#FFF8E1">
+        <td style="font-weight:600">${d.date || '-'}</td>
+        <td><strong style="color:#2C3E50">${esc(d.client || '-')}</strong></td>
+        <td class="num" style="color:#E74C3C;font-weight:700;font-size:14px">${formatNumber(d.amount)}</td>
+        <td style="font-size:12px;color:var(--lf-text-light)">${[d.bank, d.account].filter(Boolean).join(' / ') || '-'}</td>
+      </tr>`;
+    }
+    html += '</tbody></table></div>';
+  }
 
   if (data.matchResults?.gemini?.available) {
     html += `<div class="detail-panel" style="margin-top:16px">

@@ -47,13 +47,6 @@ function normalizeDate(raw) {
   return s;
 }
 
-function clientMatch(a, b) {
-  const na = normalizeClient(a);
-  const nb = normalizeClient(b);
-  if (!na || !nb) return false;
-  return na === nb || na.includes(nb) || nb.includes(na);
-}
-
 function dateMatch(d1, d2) {
   const n1 = normalizeDate(d1);
   const n2 = normalizeDate(d2);
@@ -61,14 +54,6 @@ function dateMatch(d1, d2) {
   if (n1 === n2) return true;
   if (n1.endsWith(n2) || n2.endsWith(n1)) return true;
   return false;
-}
-
-function priceMatch(a, b, tolerance = 10) {
-  return Math.abs(pn(a) - pn(b)) <= tolerance;
-}
-
-function makeKey(date, client, product, supply) {
-  return `${normalizeDate(date)}|${normalizeClient(client)}|${normalizeProduct(product)}|${Math.round(pn(supply))}`;
 }
 
 function compareSalesData(sheetData, gyeongliData) {
@@ -125,18 +110,23 @@ function compareSalesData(sheetData, gyeongliData) {
     sheetByClient[nClient].push(s);
   }
 
-  // 시트 거래처 → 경리나라 거래처 매핑
+  // 시트 거래처 → 경리나라 거래처 매핑 (최소 2글자 이상 + 가장 긴 매치 우선)
   const clientMapping = {};
   for (const sheetKey of Object.keys(sheetByClient)) {
     if (gyeongliByClient[sheetKey]) {
       clientMapping[sheetKey] = sheetKey;
     } else {
+      let bestMatch = null;
+      let bestLen = 0;
       for (const gKey of Object.keys(gyeongliByClient)) {
-        if (sheetKey.includes(gKey) || gKey.includes(sheetKey)) {
-          clientMapping[sheetKey] = gKey;
-          break;
+        const shorter = sheetKey.length <= gKey.length ? sheetKey : gKey;
+        const longer = sheetKey.length <= gKey.length ? gKey : sheetKey;
+        if (shorter.length >= 2 && longer.includes(shorter) && shorter.length > bestLen) {
+          bestMatch = gKey;
+          bestLen = shorter.length;
         }
       }
+      if (bestMatch) clientMapping[sheetKey] = bestMatch;
     }
   }
 
@@ -233,16 +223,24 @@ function compareSalesData(sheetData, gyeongliData) {
           diffs,
         };
 
-        // 금액(공급가, 단가, 세액, 수량)이 모두 일치하면 matched. 날짜만 다를 땐 일치로 간주
-        const hasAmountDiff = diffs.some(d =>
-          !d.startsWith('날짜:') && !d.includes('날짜')
-        );
-        if (hasAmountDiff) {
-          entry._status = 'mismatch';
-          results.mismatch.push(entry);
-        } else {
+        const amountDiffs = diffs.filter(d => !d.startsWith('날짜:') && !d.includes('날짜'));
+        const totalsMatch = Math.abs((match.total || 0) - sTotal) <= 10;
+        const supplyMatch = Math.abs((match.supplyAmount || 0) - sSupply) <= 10;
+
+        if (amountDiffs.length === 0) {
           entry._status = 'matched';
           results.matched.push(entry);
+        } else if (totalsMatch && supplyMatch) {
+          entry._status = 'matched';
+          entry._note = '합계/공급가 일치 (세부 미미한 차이)';
+          results.matched.push(entry);
+        } else if (totalsMatch) {
+          entry._status = 'matched';
+          entry._note = '합계금액 일치 (세부 차이 있음)';
+          results.matched.push(entry);
+        } else {
+          entry._status = 'mismatch';
+          results.mismatch.push(entry);
         }
       } else {
         results.sheetOnly.push({
@@ -320,9 +318,22 @@ function matchDeposits(salesData, depositData) {
 
   for (const deposit of depositData) {
     const depClient = normalizeClient(deposit.client);
-    const matchedClient = Object.keys(clientTotals).find(k =>
-      k === depClient || k.includes(depClient) || depClient.includes(k)
-    );
+    if (!depClient || depClient.length < 2) {
+      results.unmatched.push({ ...deposit, possibleMatches: [] });
+      continue;
+    }
+    let matchedClient = Object.keys(clientTotals).find(k => k === depClient);
+    if (!matchedClient) {
+      let bestLen = 0;
+      for (const k of Object.keys(clientTotals)) {
+        const shorter = depClient.length <= k.length ? depClient : k;
+        const longer = depClient.length <= k.length ? k : depClient;
+        if (shorter.length >= 2 && longer.includes(shorter) && shorter.length > bestLen) {
+          matchedClient = k;
+          bestLen = shorter.length;
+        }
+      }
+    }
 
     if (matchedClient) {
       results.matched.push({
