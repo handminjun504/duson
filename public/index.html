@@ -135,6 +135,8 @@
       <button class="tab-btn" data-tab="clients"><i class="ri-building-line"></i> 거래처 상세</button>
       <button class="tab-btn" data-tab="deposits"><i class="ri-money-won-circle-line"></i> 입금 매칭</button>
       <button class="tab-btn" data-tab="generate"><i class="ri-file-excel-2-line"></i> Excel 생성</button>
+      <button class="tab-btn" data-tab="raw-sheets"><i class="ri-table-line"></i> 시트 원본</button>
+      <button class="tab-btn" data-tab="raw-gyeongli"><i class="ri-database-2-line"></i> 경리나라 원본</button>
     </div>
 
     <!-- Dashboard Tab -->
@@ -258,6 +260,30 @@
           <h3 class="section-title"><i class="ri-sparkling-line"></i> AI 월간 리포트</h3>
           <div id="reportContent" class="report-box"></div>
         </div>
+      </div>
+    </div>
+
+    <!-- Raw Sheets Tab -->
+    <div class="tab-content" id="tab-raw-sheets">
+      <div class="action-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <h3 class="section-title" style="margin:0"><i class="ri-table-line"></i> Google Sheet 원본 데이터</h3>
+        <span id="rawSheetsCount" style="color:var(--lf-text-light);font-size:13px"></span>
+        <input type="text" id="rawSheetsSearch" placeholder="검색 (거래처, 품목 등)" style="margin-left:auto;padding:6px 12px;border:1px solid var(--lf-border);border-radius:6px;font-size:13px;width:220px">
+      </div>
+      <div id="rawSheetsContent" style="margin-top:12px">
+        <p style="color:var(--lf-text-light);text-align:center;padding:48px">시트 데이터를 먼저 수집하세요.</p>
+      </div>
+    </div>
+
+    <!-- Raw Gyeongli Tab -->
+    <div class="tab-content" id="tab-raw-gyeongli">
+      <div class="action-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <h3 class="section-title" style="margin:0"><i class="ri-database-2-line"></i> 경리나라 원본 데이터</h3>
+        <span id="rawGyeongliCount" style="color:var(--lf-text-light);font-size:13px"></span>
+        <input type="text" id="rawGyeongliSearch" placeholder="검색 (거래처, 품목 등)" style="margin-left:auto;padding:6px 12px;border:1px solid var(--lf-border);border-radius:6px;font-size:13px;width:220px">
+      </div>
+      <div id="rawGyeongliContent" style="margin-top:12px">
+        <p style="color:var(--lf-text-light);text-align:center;padding:48px">경리나라 데이터를 먼저 수집하세요.</p>
       </div>
     </div>
   </div>

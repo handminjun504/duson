@@ -7,6 +7,9 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+
+    if (btn.dataset.tab === 'raw-sheets') loadRawSheets();
+    if (btn.dataset.tab === 'raw-gyeongli') loadRawGyeongli();
   });
 });
 
@@ -649,6 +652,128 @@ async function generateReport() {
     // 리포트는 보너스 기능이므로 실패해도 무시
   }
 }
+
+// === Raw Data Tabs ===
+let _rawSheetsData = null;
+let _rawGyeongliData = null;
+
+async function loadRawSheets() {
+  const container = document.getElementById('rawSheetsContent');
+  const countEl = document.getElementById('rawSheetsCount');
+  try {
+    const res = await apiCall('GET', '/raw/sheets');
+    _rawSheetsData = res.data || [];
+    countEl.textContent = `(${_rawSheetsData.length}건)`;
+    renderRawSheetsTable(_rawSheetsData);
+  } catch {
+    container.innerHTML = '<p style="color:var(--lf-text-light);text-align:center;padding:48px">시트 데이터를 먼저 수집하세요.</p>';
+    countEl.textContent = '';
+  }
+}
+
+function renderRawSheetsTable(rows) {
+  const container = document.getElementById('rawSheetsContent');
+  if (!rows || rows.length === 0) {
+    container.innerHTML = '<p style="color:var(--lf-text-light);text-align:center;padding:48px">데이터 없음</p>';
+    return;
+  }
+
+  let html = '<div style="overflow-x:auto"><table class="data-table"><thead><tr>';
+  html += '<th>No</th><th>거래일자</th><th>거래처명</th><th>품목명</th><th>규격</th>';
+  html += '<th class="num">수량</th><th class="num">단가</th><th class="num">공급가액</th>';
+  html += '<th class="num">세액</th><th class="num">합계금액</th><th>비고</th>';
+  html += '</tr></thead><tbody>';
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    html += `<tr>
+      <td>${i + 1}</td>
+      <td>${esc(r.date || r.transactionDate || '')}</td>
+      <td>${esc(r.salesClient || r.client || '')}</td>
+      <td>${esc(r.productName || r.product || '')}</td>
+      <td>${esc(r.spec || r.standard || '')}</td>
+      <td class="num">${formatNumber(r.quantity)}</td>
+      <td class="num">${formatNumber(r.salesUnitPrice || r.unitPrice)}</td>
+      <td class="num">${formatNumber(r.salesSupply || r.supplyAmount)}</td>
+      <td class="num">${formatNumber(r.salesTax || r.tax)}</td>
+      <td class="num">${formatNumber(r.salesTotal || r.total)}</td>
+      <td>${esc(r.note || '')}</td>
+    </tr>`;
+  }
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
+async function loadRawGyeongli() {
+  const container = document.getElementById('rawGyeongliContent');
+  const countEl = document.getElementById('rawGyeongliCount');
+  try {
+    const res = await apiCall('GET', '/raw/gyeongli');
+    _rawGyeongliData = res.data || [];
+    countEl.textContent = `(${_rawGyeongliData.length}건)`;
+    renderRawGyeongliTable(_rawGyeongliData);
+  } catch {
+    container.innerHTML = '<p style="color:var(--lf-text-light);text-align:center;padding:48px">경리나라 데이터를 먼저 수집하세요.</p>';
+    countEl.textContent = '';
+  }
+}
+
+function renderRawGyeongliTable(rows) {
+  const container = document.getElementById('rawGyeongliContent');
+  if (!rows || rows.length === 0) {
+    container.innerHTML = '<p style="color:var(--lf-text-light);text-align:center;padding:48px">데이터 없음</p>';
+    return;
+  }
+
+  let html = '<div style="overflow-x:auto"><table class="data-table"><thead><tr>';
+  html += '<th>No</th><th>거래처</th><th>납품일</th><th>품목명</th><th>규격</th>';
+  html += '<th class="num">수량</th><th class="num">단가</th><th class="num">공급가액</th>';
+  html += '<th class="num">세액</th><th class="num">합계금액</th><th>비고</th>';
+  html += '</tr></thead><tbody>';
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    html += `<tr>
+      <td>${i + 1}</td>
+      <td>${esc(r.client || '')}</td>
+      <td>${esc(r.deliveryDate || r.date || '')}</td>
+      <td>${esc(r.productName || r.product || '')}</td>
+      <td>${esc(r.spec || r.standard || '')}</td>
+      <td class="num">${formatNumber(r.quantity)}</td>
+      <td class="num">${formatNumber(r.unitPrice)}</td>
+      <td class="num">${formatNumber(r.supplyAmount)}</td>
+      <td class="num">${formatNumber(r.vat || r.tax)}</td>
+      <td class="num">${formatNumber(r.total)}</td>
+      <td>${esc(r.note || r.remark || '')}</td>
+    </tr>`;
+  }
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
+document.getElementById('rawSheetsSearch')?.addEventListener('input', function() {
+  if (!_rawSheetsData) return;
+  const q = this.value.trim().toLowerCase();
+  if (!q) { renderRawSheetsTable(_rawSheetsData); return; }
+  const filtered = _rawSheetsData.filter(r => {
+    const text = [r.salesClient, r.client, r.productName, r.product, r.note, r.date, r.transactionDate].join(' ').toLowerCase();
+    return text.includes(q);
+  });
+  renderRawSheetsTable(filtered);
+  document.getElementById('rawSheetsCount').textContent = `(${filtered.length}/${_rawSheetsData.length}건)`;
+});
+
+document.getElementById('rawGyeongliSearch')?.addEventListener('input', function() {
+  if (!_rawGyeongliData) return;
+  const q = this.value.trim().toLowerCase();
+  if (!q) { renderRawGyeongliTable(_rawGyeongliData); return; }
+  const filtered = _rawGyeongliData.filter(r => {
+    const text = [r.client, r.productName, r.product, r.note, r.remark, r.deliveryDate, r.date].join(' ').toLowerCase();
+    return text.includes(q);
+  });
+  renderRawGyeongliTable(filtered);
+  document.getElementById('rawGyeongliCount').textContent = `(${filtered.length}/${_rawGyeongliData.length}건)`;
+});
 
 // === Init ===
 setThisMonth();

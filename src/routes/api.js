@@ -221,6 +221,20 @@ router.get('/deposits', (req, res) => {
   });
 });
 
+router.get('/raw/sheets', (req, res) => {
+  res.json({ data: appState.sheetData || [], count: appState.sheetData?.length || 0 });
+});
+
+router.get('/raw/gyeongli', (req, res) => {
+  const items = [];
+  for (const c of (appState.gyeongliSales || [])) {
+    for (const item of (c.items || [])) {
+      items.push({ client: c.client, ...item });
+    }
+  }
+  res.json({ data: items, count: items.length });
+});
+
 router.post('/match', async (req, res) => {
   try {
     const basicMatch = matcher.matchDeposits(appState.gyeongliSales, appState.gyeongliDeposits);
