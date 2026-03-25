@@ -233,11 +233,27 @@ router.post('/match', async (req, res) => {
   }
 });
 
+function buildSheetNoteMap(sheetData) {
+  const notesByClient = {};
+  if (!sheetData) return notesByClient;
+
+  for (const s of sheetData) {
+    if (!s.note) continue;
+    const nc = (s.salesClient || '').replace(/\s+/g, '').toLowerCase();
+    if (!notesByClient[nc]) notesByClient[nc] = {};
+    const np = (s.productName || '').replace(/\s+/g, '').toLowerCase();
+    if (np) notesByClient[nc][np] = s.note;
+  }
+  return notesByClient;
+}
+
 router.post('/generate', async (req, res) => {
   try {
     if (!appState.gyeongliSales || appState.gyeongliSales.length === 0) {
       return res.status(400).json({ error: '먼저 경리나라에서 데이터를 수집하세요' });
     }
+
+    const noteMap = buildSheetNoteMap(appState.sheetData);
 
     const merged = {};
     for (const c of appState.gyeongliSales) {
@@ -247,14 +263,32 @@ router.post('/generate', async (req, res) => {
       merged[c.client].items.push(...(c.items || []));
       merged[c.client].priorBalance = merged[c.client].priorBalance || c.prevBalance || 0;
     }
-    const clientsData = Object.values(merged).map(c => ({
-      ...c,
-      deposits: appState.gyeongliDeposits?.filter(d => {
-        const dc = (d.client || '').replace(/\s/g, '');
-        const tc = c.client.replace(/\s/g, '');
-        return dc.includes(tc) || tc.includes(dc);
-      }) || [],
-    }));
+
+    const clientsData = Object.values(merged).map(c => {
+      const nc = c.client.replace(/\s+/g, '').toLowerCase();
+      let sheetNotes = noteMap[nc];
+
+      if (!sheetNotes) {
+        for (const key of Object.keys(noteMap)) {
+          const shorter = nc.length <= key.length ? nc : key;
+          const longer = nc.length <= key.length ? key : nc;
+          if (shorter.length >= 2 && longer.includes(shorter)) {
+            sheetNotes = noteMap[key];
+            break;
+          }
+        }
+      }
+
+      return {
+        ...c,
+        sheetNotes: sheetNotes || {},
+        deposits: appState.gyeongliDeposits?.filter(d => {
+          const dc = (d.client || '').replace(/\s/g, '');
+          const tc = c.client.replace(/\s/g, '');
+          return dc.includes(tc) || tc.includes(dc);
+        }) || [],
+      };
+    });
 
     const result = await excelWriter.generateLedger(clientsData);
     appState.lastGenerated = { ...result, timestamp: new Date().toISOString() };

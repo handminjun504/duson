@@ -34,6 +34,9 @@ const COL_ALIASES = {
   '매출 세액': 'vat',
   '매출합계금액': 'totalAmount',
   '매출\n합계금액': 'totalAmount',
+  '비고': 'note',
+  '변경항목': 'note',
+  '변경': '_change',
 };
 
 function normalizeHeader(h) {
@@ -222,7 +225,7 @@ async function fetchSalesData(options = {}) {
         supplyAmount: pn(get('supplyAmount')),
         vat: pn(get('vat')),
         totalAmount: pn(get('totalAmount')),
-        note: (noteRows[headerIdx + 1 + rowIdx]?.[0] || '').trim(),
+        note: get('note') || (noteRows[headerIdx + 1 + rowIdx]?.[0] || '').trim(),
         _sheet: sheetName,
         _raw: row.map(c => (c || '').trim()),
       };
