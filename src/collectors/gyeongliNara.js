@@ -7,7 +7,6 @@ const USER_DATA_DIR = path.join(__dirname, '..', '..', '.browser-data');
 
 const MENU_ACT = {
   s1110: '/trgm_m002_01.act',
-  s1310: '/trco_m012_01_v6.act?MENU=SALE',
   s3120: '/fnsh_0004_01.act',
   s3130: '/rcpt_0003_01.act',
 };
@@ -17,8 +16,6 @@ let page = null;
 let context = null;
 let isLoggedIn = false;
 let isBusy = false;
-let cachedSales = null;
-let cachedDeposits = null;
 
 async function ensureBrowser() {
   if (browser && page) {
@@ -36,9 +33,18 @@ async function ensureBrowser() {
   const headless = process.env.HEADLESS !== 'false';
   context = await chromium.launchPersistentContext(USER_DATA_DIR, {
     headless,
-    slowMo: 150,
+    slowMo: headless ? 50 : 150,
     viewport: { width: 1400, height: 900 },
     locale: 'ko-KR',
+    ignoreHTTPSErrors: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-web-security',
+      '--ignore-certificate-errors',
+      '--allow-running-insecure-content',
+      '--disable-features=IsolateOrigins,site-per-process',
+    ],
   });
   browser = context;
   const pages = context.pages();
@@ -232,25 +238,6 @@ async function login() {
     logger.error(`로그인 실패. 페이지 내용: ${bodyText}`);
     throw new Error('경리나라 로그인 실패. 아이디/비밀번호를 확인하세요.');
   }
-}
-
-async function getMainIframe() {
-  await page.waitForTimeout(2000);
-
-  let frame = page.frame({ name: 'main_iframe' });
-
-  if (!frame) {
-    const frames = page.frames();
-    frame = frames.find(f => f.url().includes('serp.co.kr') && f !== page.mainFrame());
-  }
-
-  if (frame) {
-    await frame.waitForLoadState('domcontentloaded').catch(() => null);
-    await page.waitForTimeout(2000);
-    return frame;
-  }
-
-  throw new Error('main_iframe을 찾을 수 없습니다');
 }
 
 async function navigateToMenu(menuId) {
@@ -467,7 +454,6 @@ async function collectSalesData(options = {}) {
     if (clientLinks.length === 0) {
       const allText = await frame.evaluate(() => document.body?.innerText || '');
       logger.warn(`거래처 링크 없음. 페이지 텍스트 (${allText.length}자): ${allText.substring(0, 300)}`);
-      cachedSales = [];
       return [];
     }
 
@@ -498,7 +484,6 @@ async function collectSalesData(options = {}) {
       }
     }
 
-    cachedSales = salesData;
     const totalItems = salesData.reduce((s, c) => s + (c.items?.length || 0), 0);
     logger.info(`매출 수집 완료: ${salesData.length}개 거래처, ${totalItems}건`);
     return salesData;
@@ -815,7 +800,6 @@ async function collectDepositData(options = {}) {
       parseDepositDetail(dep);
     }
 
-    cachedDeposits = deposits;
     logger.info(`입금 수집 완료: 총 ${deposits.length}건`);
     return deposits;
 
@@ -898,13 +882,8 @@ async function closeBrowser() {
   }
 }
 
-function getCachedSales() { return cachedSales; }
-function getCachedDeposits() { return cachedDeposits; }
-
 module.exports = {
   collectSalesData,
   collectDepositData,
   closeBrowser,
-  getCachedSales,
-  getCachedDeposits,
 };
