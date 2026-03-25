@@ -324,30 +324,111 @@ async function navigateToMenu(menuId) {
 }
 
 async function scrollToLoadAll(target, label = '') {
-  const maxAttempts = 10;
-  let prevHeight = 0;
+  const maxAttempts = 15;
 
+  const scrollInfo = await target.evaluate(() => {
+    const candidates = [];
+    const allEls = document.querySelectorAll('div, tbody, table, section, main, article');
+    for (const el of allEls) {
+      const style = getComputedStyle(el);
+      const isScrollable = (style.overflowY === 'scroll' || style.overflowY === 'auto') && el.scrollHeight > el.clientHeight + 10;
+      if (isScrollable) {
+        candidates.push({
+          tag: el.tagName,
+          id: el.id || '',
+          cls: el.className?.toString().substring(0, 50) || '',
+          scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight,
+          diff: el.scrollHeight - el.clientHeight,
+        });
+      }
+    }
+    const docEl = document.scrollingElement || document.documentElement;
+    return {
+      docScrollHeight: docEl.scrollHeight,
+      docClientHeight: docEl.clientHeight,
+      scrollableContainers: candidates.sort((a, b) => b.diff - a.diff).slice(0, 5),
+    };
+  }).catch(() => ({ docScrollHeight: 0, docClientHeight: 0, scrollableContainers: [] }));
+
+  logger.info(`${label}: 문서 높이 ${scrollInfo.docScrollHeight}px, 스크롤 가능 컨테이너 ${scrollInfo.scrollableContainers.length}개`);
+  if (scrollInfo.scrollableContainers.length > 0) {
+    logger.info(`${label}: 컨테이너 목록: ${scrollInfo.scrollableContainers.map(c => `${c.tag}#${c.id}(${c.diff}px)`).join(', ')}`);
+  }
+
+  let prevRowCount = 0;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const currentHeight = await target.evaluate(() => {
-      const scrollEl = document.scrollingElement || document.documentElement || document.body;
-      scrollEl.scrollTop = scrollEl.scrollHeight;
-      return scrollEl.scrollHeight;
-    }).catch(() => 0);
+    const result = await target.evaluate(() => {
+      const containers = [];
+      const allEls = document.querySelectorAll('div, tbody, table, section');
+      for (const el of allEls) {
+        const style = getComputedStyle(el);
+        if ((style.overflowY === 'scroll' || style.overflowY === 'auto') && el.scrollHeight > el.clientHeight + 10) {
+          containers.push(el);
+        }
+      }
 
-    if (currentHeight === 0) break;
+      let scrolled = false;
+      for (const el of containers) {
+        if (el.scrollTop < el.scrollHeight - el.clientHeight - 5) {
+          el.scrollTop = el.scrollHeight;
+          scrolled = true;
+        }
+      }
 
-    if (attempt > 0 && currentHeight === prevHeight) {
-      logger.info(`${label}: 스크롤 완료 (${attempt}회, 높이 ${currentHeight}px)`);
+      const docEl = document.scrollingElement || document.documentElement;
+      if (docEl.scrollTop < docEl.scrollHeight - docEl.clientHeight - 5) {
+        docEl.scrollTop = docEl.scrollHeight;
+        scrolled = true;
+      }
+
+      window.scrollTo(0, document.body.scrollHeight);
+
+      const rows = document.querySelectorAll('tr');
+      return { scrolled, rowCount: rows.length, docHeight: docEl.scrollHeight };
+    }).catch(() => ({ scrolled: false, rowCount: 0, docHeight: 0 }));
+
+    if (attempt > 0 && result.rowCount === prevRowCount && !result.scrolled) {
+      logger.info(`${label}: 스크롤 완료 (${attempt}회, ${result.rowCount}행)`);
       break;
     }
+    prevRowCount = result.rowCount;
+    await page.waitForTimeout(2000);
+  }
 
-    prevHeight = currentHeight;
-    await page.waitForTimeout(1500);
+  const pageNav = await target.evaluate(() => {
+    const btns = document.querySelectorAll('a, button, input[type="button"], span');
+    const pageButtons = [];
+    for (const btn of btns) {
+      const txt = (btn.textContent?.trim() || btn.value || '');
+      if (/^[2-9]$|^1[0-9]$|^다음|^next|^▶|^>$/i.test(txt)) {
+        pageButtons.push({ text: txt, tag: btn.tagName, onclick: btn.getAttribute('onclick') || '' });
+      }
+    }
+    return pageButtons;
+  }).catch(() => []);
+
+  if (pageNav.length > 0) {
+    logger.info(`${label}: 페이지네이션 버튼 발견 ${pageNav.length}개: ${pageNav.map(p => p.text).join(', ')}`);
+
+    for (const navBtn of pageNav) {
+      if (/^[2-9]$|^1[0-9]$/.test(navBtn.text)) {
+        logger.info(`${label}: 페이지 ${navBtn.text} 이동`);
+        await target.evaluate((onclick) => {
+          if (onclick) {
+            const fn = new Function(onclick);
+            fn();
+          }
+        }, navBtn.onclick).catch(() => null);
+        await page.waitForTimeout(3000);
+      }
+    }
   }
 
   await target.evaluate(() => {
-    const scrollEl = document.scrollingElement || document.documentElement || document.body;
-    scrollEl.scrollTop = 0;
+    const docEl = document.scrollingElement || document.documentElement;
+    docEl.scrollTop = 0;
+    window.scrollTo(0, 0);
   }).catch(() => null);
 }
 
