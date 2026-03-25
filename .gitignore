@@ -1,5 +1,5 @@
 node_modules/
-.env
+# .env
 output/
 config/google-credentials.json
 *.log
