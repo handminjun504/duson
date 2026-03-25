@@ -22,7 +22,8 @@ const SENDER_FONT = { name: '맑은 고딕', size: 14, bold: true };
 const HEADER_FONT = { name: '맑은 고딕', size: 14, bold: true };
 const LABEL_FONT = { name: '맑은 고딕', size: 12, bold: true };
 const DATA_FONT = { name: '맑은 고딕', size: 11 };
-const NUM_FMT = '#,##0';
+const NUM_FMT = '#,##0_ ';
+const NUM_FMT_RED = '#,##0_);[Red](#,##0)';
 
 const ROW = {
   TITLE: 1,
@@ -190,29 +191,32 @@ async function generateLedger(clientsData, options = {}) {
         borderRow(ws, r, 1, TOTAL_COLS);
       }
 
-      ws.getRow(r).height = 22.15;
+      if (i === 0) ws.getRow(r).height = 22.15;
+      else if (i === maxData - 1) ws.getRow(r).height = 18;
+      else ws.getRow(r).height = 17.3;
     }
 
     // === R29: 월 합계 (SUM 수식) ===
     setCell(ws, ROW.TOTAL, 1, `${monthStr}월합계`, {
       font: LABEL_FONT,
-      alignment: { horizontal: 'center' },
+      alignment: { horizontal: 'center', vertical: 'middle' },
     });
     borderRow(ws, ROW.TOTAL, 2, 4);
     setCell(ws, ROW.TOTAL, 5, { formula: `SUM(E${ROW.DATA_START}:E${ROW.DATA_END})` }, {
-      font: { ...DATA_FONT, bold: true }, numFmt: NUM_FMT, alignment: { horizontal: 'center' },
+      font: { ...DATA_FONT, bold: true }, numFmt: NUM_FMT, alignment: { horizontal: 'center', vertical: 'middle' },
     });
     setCell(ws, ROW.TOTAL, 6, { formula: `SUM(F${ROW.DATA_START}:F${ROW.DATA_END})` }, {
-      font: { ...DATA_FONT, bold: true }, numFmt: NUM_FMT, alignment: { horizontal: 'center' },
+      font: { ...DATA_FONT, bold: true }, numFmt: NUM_FMT, alignment: { horizontal: 'center', vertical: 'middle' },
     });
     setCell(ws, ROW.TOTAL, 7, { formula: `SUM(G${ROW.DATA_START}:G${ROW.DATA_END})` }, {
-      font: { ...DATA_FONT, bold: true }, numFmt: NUM_FMT, alignment: { horizontal: 'center' },
+      font: { ...DATA_FONT, bold: true }, numFmt: NUM_FMT, alignment: { horizontal: 'center', vertical: 'middle' },
     });
     borderRow(ws, ROW.TOTAL, 8, TOTAL_COLS);
-    ws.getRow(ROW.TOTAL).height = 18.75;
+    ws.getRow(ROW.TOTAL).height = 18.8;
 
     // === R30: blank row ===
     borderRow(ws, 30, 1, TOTAL_COLS);
+    ws.getRow(30).height = 18.8;
 
     // === R31~R41: 입금 rows (11 rows) ===
     const maxDeposits = ROW.DEPOSIT_END - ROW.DEPOSIT_START + 1;
@@ -222,7 +226,7 @@ async function generateLedger(clientsData, options = {}) {
 
       // A: "입금" (첫 행만)
       if (i === 0) {
-        setCell(ws, r, 1, '입금', { font: LABEL_FONT, alignment: { horizontal: 'center' } });
+        setCell(ws, r, 1, '입금', { font: LABEL_FONT, alignment: { horizontal: 'center', vertical: 'middle' } });
       } else {
         ws.getRow(r).getCell(1).border = THIN_BORDER;
       }
@@ -232,7 +236,7 @@ async function generateLedger(clientsData, options = {}) {
 
       if (dep) {
         // L(12): 수금액
-        setCell(ws, r, 12, dep.amount || 0, { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
+        setCell(ws, r, 12, dep.amount || 0, { numFmt: NUM_FMT_RED, alignment: { horizontal: 'right', vertical: 'middle' } });
         // M(13): 수금일
         const depDate = toDate(dep.date);
         if (depDate) {
@@ -250,17 +254,20 @@ async function generateLedger(clientsData, options = {}) {
       // P(16): 입금 합계 SUM (첫 행에만)
       if (i === 0) {
         setCell(ws, r, 16, { formula: `SUM(L${ROW.DEPOSIT_START}:L${ROW.DEPOSIT_END})` }, {
-          numFmt: NUM_FMT, alignment: { horizontal: 'right' },
+          numFmt: NUM_FMT_RED, alignment: { horizontal: 'right', vertical: 'middle' },
         });
       }
 
-      ws.getRow(r).height = 18.75;
+      if (i === 0) ws.getRow(r).height = 18.8;
+      else if (i === maxDeposits - 1) ws.getRow(r).height = 18;
+      else if (i === 1) ws.getRow(r).height = 18;
+      else ws.getRow(r).height = 17.3;
     }
 
     // === R42: 총외상매출금미납액 ===
     setCell(ws, ROW.OUTSTANDING, 1, '총외상매출금미납액', {
       font: LABEL_FONT,
-      alignment: { horizontal: 'center' },
+      alignment: { horizontal: 'center', vertical: 'middle' },
     });
     borderRow(ws, ROW.OUTSTANDING, 2, 6);
 
@@ -271,7 +278,7 @@ async function generateLedger(clientsData, options = {}) {
     setCell(ws, ROW.OUTSTANDING, 7, { formula: `G${ROW.PRIOR}+G${ROW.TOTAL}-${depositCells}` }, {
       font: { ...DATA_FONT, bold: true },
       numFmt: NUM_FMT,
-      alignment: { horizontal: 'center' },
+      alignment: { horizontal: 'center', vertical: 'middle' },
     });
     borderRow(ws, ROW.OUTSTANDING, 8, TOTAL_COLS);
     ws.getRow(ROW.OUTSTANDING).height = 53.45;
@@ -279,11 +286,11 @@ async function generateLedger(clientsData, options = {}) {
     // === R43: 입금계좌 ===
     setCell(ws, ROW.BANK, 1, '입금계좌', {
       font: SENDER_FONT,
-      alignment: { horizontal: 'center' },
+      alignment: { horizontal: 'center', vertical: 'middle' },
     });
     setCell(ws, ROW.BANK, 2, COMPANY_INFO.bankAccount, {
       font: SENDER_FONT,
-      alignment: { horizontal: 'left' },
+      alignment: { horizontal: 'left', vertical: 'middle' },
     });
     borderRow(ws, ROW.BANK, 3, TOTAL_COLS);
     ws.getRow(ROW.BANK).height = 20.25;
