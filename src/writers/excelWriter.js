@@ -159,15 +159,32 @@ async function generateLedger(clientsData, options = {}) {
         // B: 제품명
         setCell(ws, r, 2, item.product || '', { alignment: { horizontal: 'center' } });
         // C: 수량
-        setCell(ws, r, 3, item.qty || '', { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
+        const qty = typeof item.qty === 'number' ? item.qty : (parseFloat(String(item.qty).replace(/[,\s]/g, '')) || 0);
+        setCell(ws, r, 3, qty || '', { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
         // D: 단가
-        setCell(ws, r, 4, item.unitPrice || '', { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
-        // E: 공급가액 = C * D
-        setCell(ws, r, 5, { formula: `C${r}*D${r}` }, { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
-        // F: 부가세 = E * 10%
-        setCell(ws, r, 6, { formula: `E${r}*10%` }, { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
-        // G: 합계금액 = E + F
-        setCell(ws, r, 7, { formula: `E${r}+F${r}` }, { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
+        const uPrice = typeof item.unitPrice === 'number' ? item.unitPrice : (parseFloat(String(item.unitPrice).replace(/[,\s]/g, '')) || 0);
+        setCell(ws, r, 4, uPrice || '', { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
+        // E: 공급가액 — 원본 값 우선, 없으면 수식
+        const supply = item.supplyAmount || 0;
+        if (supply) {
+          setCell(ws, r, 5, supply, { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
+        } else {
+          setCell(ws, r, 5, { formula: `C${r}*D${r}` }, { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
+        }
+        // F: 부가세 — 원본 값 우선, 없으면 수식
+        const vat = item.vat || 0;
+        if (vat || supply) {
+          setCell(ws, r, 6, vat, { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
+        } else {
+          setCell(ws, r, 6, { formula: `E${r}*10%` }, { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
+        }
+        // G: 합계금액 — 원본 값 우선, 없으면 수식
+        const total = item.total || 0;
+        if (total) {
+          setCell(ws, r, 7, total, { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
+        } else {
+          setCell(ws, r, 7, { formula: `E${r}+F${r}` }, { numFmt: NUM_FMT, alignment: { horizontal: 'right' } });
+        }
 
         // H~J: 수금일/수금액/이월금액 (빈 칸)
         borderRow(ws, r, 8, 10);
