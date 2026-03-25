@@ -41,7 +41,7 @@ const ROW = {
 
 const TOTAL_COLS = 14;
 const COL_WIDTHS = [20.75, 24.13, 8.43, 10.38, 11.51, 10.26, 15.13, 11.88, 10.88, 12.01, 9.76, 11.13, 9.76, 12.63, 8.43, 10.76];
-const HEADERS = ['매출처', '제품명', '수량', '단가', '공급가액', '부가세', '합계금액', '', '', '이월금액', '납품일', '수금액', '수금일', '비고'];
+const HEADERS = ['매출처', '제품명', '수량', '단가', '공급가액', '부가세', '합계금액', '수금일', '수금액', '이월금액', '납품일', '', '', '비고'];
 
 function setCell(ws, row, col, value, opts = {}) {
   const cell = ws.getRow(row).getCell(col);
@@ -231,29 +231,29 @@ async function generateLedger(clientsData, options = {}) {
         ws.getRow(r).getCell(1).border = THIN_BORDER;
       }
 
-      // B~K: 빈 칸
-      borderRow(ws, r, 2, 11);
+      // B~G: 빈 칸
+      borderRow(ws, r, 2, 7);
 
       if (dep) {
-        // L(12): 수금액
-        setCell(ws, r, 12, dep.amount || 0, { numFmt: NUM_FMT_RED, alignment: { horizontal: 'right', vertical: 'middle' } });
-        // M(13): 수금일
+        // H(8): 수금일
         const depDate = toDate(dep.date);
         if (depDate) {
-          setCell(ws, r, 13, depDate, { alignment: { horizontal: 'center' }, numFmt: 'YYYY-MM-DD' });
+          setCell(ws, r, 8, depDate, { alignment: { horizontal: 'center' }, numFmt: 'YYYY-MM-DD' });
         } else {
-          ws.getRow(r).getCell(13).border = THIN_BORDER;
+          ws.getRow(r).getCell(8).border = THIN_BORDER;
         }
+        // I(9): 수금액
+        setCell(ws, r, 9, dep.amount || 0, { numFmt: NUM_FMT_RED, alignment: { horizontal: 'right', vertical: 'middle' } });
       } else {
-        borderRow(ws, r, 12, 13);
+        borderRow(ws, r, 8, 9);
       }
 
-      // N: 빈 칸
-      ws.getRow(r).getCell(14).border = THIN_BORDER;
+      // J~N: 빈 칸
+      borderRow(ws, r, 10, TOTAL_COLS);
 
       // P(16): 입금 합계 SUM (첫 행에만)
       if (i === 0) {
-        setCell(ws, r, 16, { formula: `SUM(L${ROW.DEPOSIT_START}:L${ROW.DEPOSIT_END})` }, {
+        setCell(ws, r, 16, { formula: `SUM(I${ROW.DEPOSIT_START}:I${ROW.DEPOSIT_END})` }, {
           numFmt: NUM_FMT_RED, alignment: { horizontal: 'right', vertical: 'middle' },
         });
       }
@@ -273,7 +273,7 @@ async function generateLedger(clientsData, options = {}) {
 
     const depositCells = Array.from(
       { length: maxDeposits },
-      (_, i) => `L${ROW.DEPOSIT_START + i}`,
+      (_, i) => `I${ROW.DEPOSIT_START + i}`,
     ).join('-');
     setCell(ws, ROW.OUTSTANDING, 7, { formula: `G${ROW.PRIOR}+G${ROW.TOTAL}-${depositCells}` }, {
       font: { ...DATA_FONT, bold: true },
