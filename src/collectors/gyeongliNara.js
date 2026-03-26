@@ -26,6 +26,7 @@ let page = null;
 let context = null;
 let isLoggedIn = false;
 let isBusy = false;
+let loginRetried = false;
 const progress = { percent: 0, message: '', step: '', total: 0, current: 0 };
 
 function updateProgress(percent, message, extra = {}) {
@@ -281,13 +282,14 @@ async function login() {
   const afterUrl = page.url();
   logger.info(`로그인 후 URL: ${afterUrl}`);
 
-  // alert 팝업 처리 (잘못된 비밀번호 등)
-  const alertText = await page.evaluate(() => {
-    return window.__lastAlert || null;
-  }).catch(() => null);
+  const alertText = await page.evaluate(() => window.__lastAlert || null).catch(() => null);
+  if (alertText) logger.warn(`alert 메시지: ${alertText}`);
 
   const hasToolbar = await page.locator('.toolbar2, .co_name, .gnb, .lnb, #main_iframe').count();
   const hasFrame = page.frames().length > 1;
+  const hasPwStill = await page.locator('input[type="password"]').count();
+
+  logger.info(`로그인 판별: toolbar=${hasToolbar} frames=${page.frames().length} pwField=${hasPwStill} url=${afterUrl}`);
 
   if (hasToolbar > 0 || hasFrame) {
     isLoggedIn = true;
@@ -295,14 +297,26 @@ async function login() {
   } else if (!afterUrl.includes('0002_01') && afterUrl.includes('serp.co.kr')) {
     isLoggedIn = true;
     logger.info('경리나라 로그인 성공 (URL 기반 확인)');
+  } else if (hasPwStill === 0 && afterUrl.includes('serp.co.kr')) {
+    isLoggedIn = true;
+    logger.info('경리나라 로그인 성공 (비밀번호 필드 사라짐)');
   } else {
     const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '');
-    const pageInputs = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('input')).map(i => `${i.type}:${i.name||i.id}=${i.value?.substring(0,3)}***`).join(', ')
-    );
-    logger.error(`로그인 실패 디버그`, { afterUrl, bodyText, pageInputs, alertText, framesCount: page.frames().length });
+    logger.error(`로그인 실패 디버그`, { afterUrl, bodyText, alertText, frames: page.frames().length });
+
+    // 영구 컨텍스트가 꼬인 경우 쿠키/스토리지 초기화 후 재시도
+    if (!loginRetried) {
+      loginRetried = true;
+      logger.info('쿠키 초기화 후 로그인 재시도...');
+      await page.context().clearCookies();
+      await page.evaluate(() => { try { localStorage.clear(); sessionStorage.clear(); } catch {} });
+      isLoggedIn = false;
+      return login();
+    }
+    loginRetried = false;
     throw new Error('경리나라 로그인 실패. 아이디/비밀번호를 확인하세요.');
   }
+  loginRetried = false;
 }
 
 async function navigateToMenu(menuId) {
