@@ -237,11 +237,17 @@ async function login() {
 
   await idSelector.click({ force: true }).catch(() => null);
   await idSelector.fill(userId);
+  await idSelector.dispatchEvent('input');
+  await idSelector.dispatchEvent('change');
   logger.info('ID 입력 완료');
 
   await pwField.click({ force: true }).catch(() => null);
   await pwField.fill(userPw);
+  await pwField.dispatchEvent('input');
+  await pwField.dispatchEvent('change');
   logger.info('PW 입력 완료');
+
+  await page.waitForTimeout(200);
 
   logger.info('로그인 버튼 클릭 시도...');
   // 1차: Playwright locator로 로그인 버튼 클릭
