@@ -27,22 +27,24 @@ function hideLoading() {
   stopProgressPolling();
 }
 
+async function pollProgressOnce() {
+  try {
+    const p = await fetch(`${API}/progress`).then(r => r.json());
+    const bar = document.getElementById('progressBar');
+    document.getElementById('loadingText').textContent = p.message ? `${p.message} (${p.percent}%)` : '수집 준비 중...';
+    if (bar) bar.style.width = `${p.percent}%`;
+  } catch { /* ignore */ }
+}
+
 function startProgressPolling() {
   stopProgressPolling();
-  const bar = document.getElementById('progressBar');
   const barWrap = document.getElementById('progressBarWrap');
+  const bar = document.getElementById('progressBar');
   if (barWrap) barWrap.style.display = 'block';
   if (bar) bar.style.width = '0%';
 
-  _progressInterval = setInterval(async () => {
-    try {
-      const p = await apiCall('GET', '/progress');
-      if (p.percent > 0) {
-        document.getElementById('loadingText').textContent = `${p.message} (${p.percent}%)`;
-        if (bar) bar.style.width = `${p.percent}%`;
-      }
-    } catch { /* ignore */ }
-  }, 2000);
+  pollProgressOnce();
+  _progressInterval = setInterval(pollProgressOnce, 1500);
 }
 
 function stopProgressPolling() {
