@@ -73,31 +73,15 @@ async function ensureBrowser() {
   page.setDefaultTimeout(30000);
 
   page.on('response', async (response) => {
-    const req = response.request();
     const url = response.url();
-    const type = req.resourceType();
-    if (type === 'xhr' || type === 'fetch' || (type === 'document' && url.includes('.act'))) {
-      const method = req.method();
-      const postData = req.postData() || '';
-      const status = response.status();
-      const contentType = response.headers()['content-type'] || '';
-      let bodyPreview = '';
-      try {
-        const body = await response.text();
-        bodyPreview = body.substring(0, 500).replace(/\n/g, ' ');
-      } catch { /* ignore */ }
-      const logLine = `${method} ${url} (${status}) ct=${contentType}`;
-      logger.info(`[NET] ${logLine}`);
-      appendNetLog(`[REQ] ${logLine}`);
-      if (postData) {
-        logger.info(`[NET-POST] ${postData.substring(0, 500)}`);
-        appendNetLog(`[POST] ${postData.substring(0, 1000)}`);
-      }
-      if (bodyPreview) {
-        logger.info(`[NET-BODY] ${bodyPreview.substring(0, 300)}`);
-        appendNetLog(`[BODY] ${bodyPreview}`);
-      }
-    }
+    if (!url.includes('.act')) return;
+    const req = response.request();
+    const method = req.method();
+    const postData = req.postData() || '';
+    const status = response.status();
+    const logLine = `${method} ${url} (${status})`;
+    appendNetLog(`[REQ] ${logLine}`);
+    if (postData) appendNetLog(`[POST] ${postData.substring(0, 1000)}`);
   });
 
   // missinstall 리다이렉트를 네트워크 레벨에서 차단
@@ -251,29 +235,13 @@ async function login() {
     ? idField
     : page.locator('input[type="text"], input[type="email"]').first();
 
-  // 기존 값 클리어 후 Playwright type()으로 실제 키 입력 시뮬레이션
   await idSelector.click({ force: true }).catch(() => null);
-  await idSelector.fill('');
-  await idSelector.type(userId, { delay: 50 });
+  await idSelector.fill(userId);
   logger.info('ID 입력 완료');
 
   await pwField.click({ force: true }).catch(() => null);
-  await pwField.fill('');
-  await pwField.type(userPw, { delay: 50 });
+  await pwField.fill(userPw);
   logger.info('PW 입력 완료');
-
-  await page.waitForTimeout(500);
-
-  // 입력값 검증
-  const filledValues = await page.evaluate(() => {
-    const idEl = document.querySelector('input[type="text"], input[type="email"]');
-    const pwEl = document.querySelector('input[type="password"]');
-    return {
-      idLen: idEl?.value?.length || 0,
-      pwLen: pwEl?.value?.length || 0,
-    };
-  });
-  logger.info(`입력 검증 - ID길이: ${filledValues.idLen}, PW길이: ${filledValues.pwLen}`);
 
   logger.info('로그인 버튼 클릭 시도...');
   // 1차: Playwright locator로 로그인 버튼 클릭
@@ -345,7 +313,7 @@ async function navigateToMenu(menuId) {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(1000);
   }
 
   let frame = page.frame({ name: 'main_iframe' });
@@ -358,7 +326,7 @@ async function navigateToMenu(menuId) {
   if (frame) {
     const targetUrl = `${BASE_URL}${actFile}`;
     await frame.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(800);
     logger.info(`iframe URL: ${frame.url()}`);
     return frame;
   }
@@ -368,7 +336,7 @@ async function navigateToMenu(menuId) {
     waitUntil: 'domcontentloaded',
     timeout: 30000,
   });
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(800);
   return page.mainFrame();
 }
 
@@ -398,176 +366,105 @@ async function scrollToLoadAll(target, label = '') {
 async function setDateRange(frame, startDate, endDate) {
   if (!startDate && !endDate) return;
 
-  const fmtDash = (d) => (d || '').replace(/\//g, '-');
-  const fmtSlash = (d) => (d || '').replace(/-/g, '/');
-  const startDash = fmtDash(startDate);
-  const endDash = fmtDash(endDate);
-  const startSlash = fmtSlash(startDate);
-  const endSlash = fmtSlash(endDate);
+  const startDash = (startDate || '').replace(/\//g, '-');
+  const endDash = (endDate || '').replace(/\//g, '-');
+  const startSlash = (startDate || '').replace(/-/g, '/');
+  const endSlash = (endDate || '').replace(/-/g, '/');
 
   logger.info(`날짜 범위 설정: ${startDash} ~ ${endDash}`);
 
-  const dateInputInfo = await frame.evaluate(() => {
-    const inputs = [];
-    const allInputs = document.querySelectorAll('input[type="text"], input:not([type])');
-    for (const el of allInputs) {
-      const v = el.value || '';
-      const id = el.id || '';
-      const name = el.name || '';
-      const hasDp = el.classList.contains('hasDatepicker');
-      const looksDate = /\d{4}[-/]\d{2}[-/]\d{2}/.test(v);
-      if (id || name || hasDp || looksDate) {
-        inputs.push({ id, name, value: v, hasDp, looksDate, visible: el.offsetParent !== null });
-      }
+  const result = await frame.evaluate(({ sDash, eDash, sSlash, eSlash }) => {
+    const log = [];
+
+    function setInput(el, val) {
+      el.value = val;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      if (setter) setter.call(el, val);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
     }
-    return inputs;
-  });
 
-  logger.info(`페이지 input 필드 스캔: ${dateInputInfo.length}개`);
-  const dateFields = dateInputInfo.filter(i => i.looksDate || i.hasDp || /date|dt|일자/i.test(i.id + i.name));
-  for (const f of dateFields) {
-    logger.info(`  날짜 필드: id=${f.id} name=${f.name} value="${f.value}" datepicker=${f.hasDp} visible=${f.visible}`);
-  }
-
-  const usesSlash = dateFields.some(f => f.value.includes('/'));
-  const startVal = usesSlash ? startSlash : startDash;
-  const endVal = usesSlash ? endSlash : endDash;
-  logger.info(`날짜 포맷: ${usesSlash ? 'YYYY/MM/DD' : 'YYYY-MM-DD'}`);
-
-  const startSelectors = ['#txtSrcStartDt', '#txtDtlSrcStartDt', 'input[name="STR_DT"]'];
-  const endSelectors = ['#txtSrcEndDt', '#txtDtlSrcEndDt', 'input[name="END_DT"]'];
-
-  let setCount = 0;
-
-  for (const sel of startSelectors) {
-    try {
-      const el = frame.locator(sel).first();
-      if (await el.count() > 0) {
-        const before = await el.inputValue().catch(() => '');
-        await el.click({ force: true }).catch(() => null);
-        await el.fill('');
-        await el.type(startVal, { delay: 30 });
-        await el.dispatchEvent('change');
-        await el.dispatchEvent('blur');
-        logger.info(`시작일 설정(${sel}): "${before}" → "${startVal}"`);
-        setCount++;
-        break;
-      }
-    } catch (e) { logger.warn(`시작일 ${sel} 실패: ${e.message}`); }
-  }
-
-  for (const sel of endSelectors) {
-    try {
-      const el = frame.locator(sel).first();
-      if (await el.count() > 0) {
-        const before = await el.inputValue().catch(() => '');
-        await el.click({ force: true }).catch(() => null);
-        await el.fill('');
-        await el.type(endVal, { delay: 30 });
-        await el.dispatchEvent('change');
-        await el.dispatchEvent('blur');
-        logger.info(`종료일 설정(${sel}): "${before}" → "${endVal}"`);
-        setCount++;
-        break;
-      }
-    } catch (e) { logger.warn(`종료일 ${sel} 실패: ${e.message}`); }
-  }
-
-  if (setCount === 0) {
-    for (const f of dateFields) {
-      if (!f.visible || setCount >= 2) continue;
-      const sel = f.id ? `#${f.id}` : (f.name ? `input[name="${f.name}"]` : null);
-      if (!sel) continue;
-      try {
-        const el = frame.locator(sel).first();
-        const isStart = /start|str|from|시작/i.test(f.id + f.name) || f.value <= startVal;
-        const val = isStart ? startVal : endVal;
-        await el.click({ force: true }).catch(() => null);
-        await el.fill('');
-        await el.type(val, { delay: 30 });
-        await el.dispatchEvent('change');
-        logger.info(`날짜 필드 설정(${sel}): "${f.value}" → "${val}"`);
-        setCount++;
-      } catch (e) { logger.warn(`날짜 필드 ${sel} 실패: ${e.message}`); }
-    }
-  }
-
-  if (setCount === 0) {
-    logger.error('날짜 필드를 하나도 설정하지 못했습니다!');
-    return;
-  }
-
-  await page.waitForTimeout(300);
-
-  const forceSetResult = await frame.evaluate(({ sVal, eVal }) => {
     const startIds = ['txtSrcStartDt', 'txtDtlSrcStartDt'];
     const endIds = ['txtSrcEndDt', 'txtDtlSrcEndDt'];
-    const log = [];
+    let startSet = false, endSet = false;
+
     for (const id of startIds) {
       const el = document.getElementById(id);
       if (el) {
+        const usesSlash = el.value.includes('/');
+        const val = usesSlash ? sSlash : sDash;
         const before = el.value;
-        el.value = sVal;
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-        if (setter) { setter.call(el, sVal); }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        log.push(`${id}: "${before}" → "${el.value}"`);
+        setInput(el, val);
+        log.push(`start ${id}: "${before}" -> "${el.value}"`);
+        startSet = true;
+        break;
       }
     }
     for (const id of endIds) {
       const el = document.getElementById(id);
       if (el) {
+        const usesSlash = el.value.includes('/');
+        const val = usesSlash ? eSlash : eDash;
         const before = el.value;
-        el.value = eVal;
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-        if (setter) { setter.call(el, eVal); }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        log.push(`${id}: "${before}" → "${el.value}"`);
+        setInput(el, val);
+        log.push(`end ${id}: "${before}" -> "${el.value}"`);
+        endSet = true;
+        break;
       }
     }
-    return log;
-  }, { sVal: startVal, eVal: endVal });
-  logger.info(`날짜 강제 설정: ${forceSetResult.join(', ')}`);
 
-  const verifyBefore = await frame.evaluate(() => {
-    const fields = ['txtSrcStartDt', 'txtSrcEndDt', 'txtDtlSrcStartDt', 'txtDtlSrcEndDt'];
-    return fields.map(id => { const el = document.getElementById(id); return el ? `${id}="${el.value}"` : null; }).filter(Boolean).join(', ');
-  });
-  logger.info(`조회 전 날짜 값: ${verifyBefore}`);
-
-  const searchResult = await frame.evaluate(() => {
-    const log = [];
-    try { if (typeof fn_search === 'function') { fn_search(); log.push('fn_search()'); return log; } } catch (e) { log.push(`fn_search err: ${e.message}`); }
-    try { if (typeof fn_Search === 'function') { fn_Search(); log.push('fn_Search()'); return log; } } catch (e) { log.push(`fn_Search err: ${e.message}`); }
-    try { if (typeof doSearch === 'function') { doSearch(); log.push('doSearch()'); return log; } } catch (e) { log.push(`doSearch err: ${e.message}`); }
-
-    const allEls = document.querySelectorAll('[onclick]');
-    for (const el of allEls) {
-      const oc = el.getAttribute('onclick') || '';
-      if (/fn_search|fn_Search|doSearch/.test(oc)) { el.click(); log.push(`onclick: ${oc.substring(0, 50)}`); return log; }
+    if (!startSet || !endSet) {
+      const allInputs = document.querySelectorAll('input[type="text"], input:not([type])');
+      for (const el of allInputs) {
+        if (startSet && endSet) break;
+        const v = el.value || '';
+        const id = el.id || '';
+        const name = el.name || '';
+        const isDate = /\d{4}[-/]\d{2}[-/]\d{2}/.test(v) || el.classList.contains('hasDatepicker');
+        if (!isDate || el.offsetParent === null) continue;
+        const usesSlash = v.includes('/');
+        if (!startSet && (/start|str|from/i.test(id + name) || v <= sDash)) {
+          setInput(el, usesSlash ? sSlash : sDash);
+          log.push(`start fallback ${id||name}: "${v}" -> "${el.value}"`);
+          startSet = true;
+        } else if (!endSet) {
+          setInput(el, usesSlash ? eSlash : eDash);
+          log.push(`end fallback ${id||name}: "${v}" -> "${el.value}"`);
+          endSet = true;
+        }
+      }
     }
-    const btns = document.querySelectorAll('button, a, input[type="button"], img, span');
+
+    log.push(`set: start=${startSet}, end=${endSet}`);
+
+    try { if (typeof fn_search === 'function') { fn_search(); log.push('fn_search()'); return log; } } catch (e) { log.push('fn_search err: ' + e.message); }
+    try { if (typeof fn_Search === 'function') { fn_Search(); log.push('fn_Search()'); return log; } } catch (e) { log.push('fn_Search err: ' + e.message); }
+    try { if (typeof doSearch === 'function') { doSearch(); log.push('doSearch()'); return log; } } catch (e) { log.push('doSearch err: ' + e.message); }
+
+    const btns = document.querySelectorAll('[onclick], button, a, input[type="button"], img, span');
     for (const btn of btns) {
+      const oc = btn.getAttribute('onclick') || '';
+      if (/fn_search|fn_Search|doSearch/.test(oc)) { btn.click(); log.push('onclick: ' + oc.substring(0, 50)); return log; }
       const txt = (btn.textContent?.trim() || btn.value || btn.alt || btn.title || '');
-      if (txt === '조회' || txt === '검색') { btn.click(); log.push(`클릭: "${txt}"`); return log; }
+      if (txt === '조회' || txt === '검색') { btn.click(); log.push('click: ' + txt); return log; }
     }
-    log.push('조회 함수/버튼 미발견');
+    log.push('search button not found');
     return log;
-  });
-  logger.info(`검색 실행: ${searchResult.join(' | ')}`);
+  }, { sDash: startDash, eDash: endDash, sSlash: startSlash, eSlash: endSlash });
 
-  await page.waitForTimeout(2000);
+  logger.info(`날짜+조회 결과: ${result.join(' | ')}`);
+
+  await page.waitForTimeout(1500);
 
   const afterCheck = await frame.evaluate(() => {
     const fields = ['txtSrcStartDt', 'txtSrcEndDt', 'txtDtlSrcStartDt', 'txtDtlSrcEndDt'];
-    const vals = fields.map(id => { const el = document.getElementById(id); return el ? `${id}="${el.value}"` : null; }).filter(Boolean);
+    const vals = fields.map(id => { const el = document.getElementById(id); return el ? id + '=' + el.value : null; }).filter(Boolean);
     const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
-    vals.push(`거래처: ${links.length}개`);
+    vals.push('clients:' + links.length);
     return vals.join(', ');
   });
-  logger.info(`조회 후 상태: ${afterCheck}`);
+  logger.info(`조회 후: ${afterCheck}`);
 }
 
 async function collectSalesData(options = {}) {
@@ -589,8 +486,6 @@ async function collectSalesData(options = {}) {
 
     updateProgress(20, '날짜 범위 설정...');
     await setDateRange(frame, startDate, endDate);
-
-    await scrollToLoadAll(frame, '거래처 목록');
 
     const clientLinks = await frame.evaluate(() => {
       const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
