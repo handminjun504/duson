@@ -60,6 +60,10 @@ router.get('/status', (req, res) => {
   });
 });
 
+router.get('/progress', (req, res) => {
+  res.json(gyeongliNara.getProgress());
+});
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function validateDates(startDate, endDate) {
   if (startDate && !DATE_RE.test(startDate)) return '시작 날짜 형식이 잘못되었습니다 (YYYY-MM-DD)';

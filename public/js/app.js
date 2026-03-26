@@ -14,13 +14,41 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 // === Utilities ===
-function showLoading(text = '처리 중...') {
+let _progressInterval = null;
+
+function showLoading(text = '처리 중...', pollProgress = false) {
   document.getElementById('loadingText').textContent = text;
   document.getElementById('loading').classList.add('show');
+  if (pollProgress) startProgressPolling();
 }
 
 function hideLoading() {
   document.getElementById('loading').classList.remove('show');
+  stopProgressPolling();
+}
+
+function startProgressPolling() {
+  stopProgressPolling();
+  const bar = document.getElementById('progressBar');
+  const barWrap = document.getElementById('progressBarWrap');
+  if (barWrap) barWrap.style.display = 'block';
+  if (bar) bar.style.width = '0%';
+
+  _progressInterval = setInterval(async () => {
+    try {
+      const p = await apiCall('GET', '/progress');
+      if (p.percent > 0) {
+        document.getElementById('loadingText').textContent = `${p.message} (${p.percent}%)`;
+        if (bar) bar.style.width = `${p.percent}%`;
+      }
+    } catch { /* ignore */ }
+  }, 2000);
+}
+
+function stopProgressPolling() {
+  if (_progressInterval) { clearInterval(_progressInterval); _progressInterval = null; }
+  const barWrap = document.getElementById('progressBarWrap');
+  if (barWrap) barWrap.style.display = 'none';
 }
 
 function toast(message, type = 'info') {
@@ -131,7 +159,7 @@ function getDateParams() {
 async function collectGyeongli() {
   const dates = getDateParams();
   const label = dates.startDate ? `${dates.startDate} ~ ${dates.endDate}` : '기본 기간';
-  showLoading(`경리나라 수집 중... (${label})`);
+  showLoading(`경리나라 수집 중... (${label})`, true);
   try {
     const data = await apiCall('POST', '/collect/gyeongli', dates);
     const total = data.clients.reduce((s, c) => s + c.itemCount, 0);

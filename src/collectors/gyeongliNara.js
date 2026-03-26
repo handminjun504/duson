@@ -16,6 +16,17 @@ let page = null;
 let context = null;
 let isLoggedIn = false;
 let isBusy = false;
+const progress = { percent: 0, message: '', step: '', total: 0, current: 0 };
+
+function updateProgress(percent, message, extra = {}) {
+  progress.percent = Math.min(100, Math.round(percent));
+  progress.message = message;
+  Object.assign(progress, extra);
+}
+
+function getProgress() {
+  return { ...progress };
+}
 
 async function ensureBrowser() {
   if (browser && page) {
@@ -492,16 +503,21 @@ async function setDateRange(frame, startDate, endDate) {
 async function collectSalesData(options = {}) {
   if (isBusy) throw new Error('이미 수집 중입니다. 잠시 후 다시 시도하세요.');
   isBusy = true;
+  updateProgress(0, '준비 중...');
 
   const { startDate, endDate } = options;
 
   try {
+    updateProgress(5, '브라우저 시작...');
     await ensureBrowser();
+    updateProgress(10, '로그인 중...');
     await login();
 
+    updateProgress(15, '거래명세표 페이지 이동...');
     logger.info(`매출(거래명세표) 페이지 이동... ${startDate ? `(${startDate} ~ ${endDate})` : '(기본 기간)'}`);
     const frame = await navigateToMenu('s1110');
 
+    updateProgress(20, '날짜 범위 설정...');
     await setDateRange(frame, startDate, endDate);
 
     await scrollToLoadAll(frame, '거래처 목록');
@@ -517,16 +533,22 @@ async function collectSalesData(options = {}) {
     });
 
     logger.info(`${clientLinks.length}개 거래처 발견: ${clientLinks.map(c => c.name).join(', ')}`);
+    updateProgress(25, `${clientLinks.length}개 거래처 발견`, { total: clientLinks.length, current: 0 });
 
     if (clientLinks.length === 0) {
       const allText = await frame.evaluate(() => document.body?.innerText || '');
       logger.warn(`거래처 링크 없음. 페이지 텍스트 (${allText.length}자): ${allText.substring(0, 300)}`);
+      updateProgress(100, '거래처 없음');
       return [];
     }
 
     const salesData = [];
 
-    for (const client of clientLinks) {
+    for (let idx = 0; idx < clientLinks.length; idx++) {
+      const client = clientLinks[idx];
+      const pct = 25 + Math.round((idx / clientLinks.length) * 60);
+      updateProgress(pct, `거래처 수집: ${client.name} (${idx + 1}/${clientLinks.length})`, { current: idx + 1 });
+
       try {
         await page.evaluate(() => true);
       } catch {
@@ -560,10 +582,12 @@ async function collectSalesData(options = {}) {
       logger.info(`수집된 날짜 범위: ${allDates[0]} ~ ${allDates[allDates.length - 1]} (${allDates.length}건)`);
     }
 
+    updateProgress(85, `매출 수집 완료: ${salesData.length}개 거래처, ${totalItems}건`);
     logger.info(`매출 수집 완료: ${salesData.length}개 거래처, ${totalItems}건`);
     return salesData;
 
   } catch (err) {
+    updateProgress(0, `오류: ${err.message}`);
     logger.error('경리나라 매출 데이터 수집 실패', { error: err.message });
     throw err;
   } finally {
@@ -759,9 +783,11 @@ async function collectDepositData(options = {}) {
   const { startDate, endDate } = options;
 
   try {
+    updateProgress(88, '입금내역 수집 시작...');
     await ensureBrowser();
     await login();
 
+    updateProgress(90, '입출내역조회 페이지 이동...');
     logger.info(`입출내역조회 페이지 이동... ${startDate ? `(${startDate} ~ ${endDate})` : '(기본 기간)'}`);
     const frame = await navigateToMenu('s3120');
 
@@ -877,6 +903,7 @@ async function collectDepositData(options = {}) {
       parseDepositDetail(dep);
     }
 
+    updateProgress(100, `수집 완료: 입금 ${deposits.length}건`);
     logger.info(`입금 수집 완료: 총 ${deposits.length}건`);
     return deposits;
 
@@ -963,4 +990,5 @@ module.exports = {
   collectSalesData,
   collectDepositData,
   closeBrowser,
+  getProgress,
 };
