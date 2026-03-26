@@ -406,13 +406,35 @@ async function setDateRange(frame, startDate, endDate) {
   const result = await frame.evaluate(({ sDash, eDash, sSlash, eSlash }) => {
     const log = [];
 
-    function setInput(el, val) {
+    function setDateField(el, dashVal, slashVal) {
+      const usesSlash = el.value.includes('/');
+      const val = usesSlash ? slashVal : dashVal;
+      const before = el.value;
+
       el.value = val;
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
       if (setter) setter.call(el, val);
+
+      // jQuery datepicker 내부 상태 동기화
+      try {
+        if (typeof $ !== 'undefined' && $(el).hasClass('hasDatepicker')) {
+          const parts = dashVal.split('-');
+          const dateObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+          $(el).datepicker('setDate', dateObj);
+          log.push(`  datepicker setDate: ${dateObj.toISOString().substring(0,10)}`);
+        }
+      } catch (e) { log.push(`  datepicker err: ${e.message}`); }
+
+      // jQuery val() 도 시도
+      try {
+        if (typeof $ !== 'undefined') { $(el).val(val).trigger('change'); }
+      } catch {}
+
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       el.dispatchEvent(new Event('blur', { bubbles: true }));
+
+      return `"${before}" -> "${el.value}"`;
     }
 
     const startIds = ['txtSrcStartDt', 'txtDtlSrcStartDt'];
@@ -422,11 +444,8 @@ async function setDateRange(frame, startDate, endDate) {
     for (const id of startIds) {
       const el = document.getElementById(id);
       if (el) {
-        const usesSlash = el.value.includes('/');
-        const val = usesSlash ? sSlash : sDash;
-        const before = el.value;
-        setInput(el, val);
-        log.push(`start ${id}: "${before}" -> "${el.value}"`);
+        const r = setDateField(el, sDash, sSlash);
+        log.push(`start ${id}: ${r}`);
         startSet = true;
         break;
       }
@@ -434,11 +453,8 @@ async function setDateRange(frame, startDate, endDate) {
     for (const id of endIds) {
       const el = document.getElementById(id);
       if (el) {
-        const usesSlash = el.value.includes('/');
-        const val = usesSlash ? eSlash : eDash;
-        const before = el.value;
-        setInput(el, val);
-        log.push(`end ${id}: "${before}" -> "${el.value}"`);
+        const r = setDateField(el, eDash, eSlash);
+        log.push(`end ${id}: ${r}`);
         endSet = true;
         break;
       }
@@ -453,20 +469,26 @@ async function setDateRange(frame, startDate, endDate) {
         const name = el.name || '';
         const isDate = /\d{4}[-/]\d{2}[-/]\d{2}/.test(v) || el.classList.contains('hasDatepicker');
         if (!isDate || el.offsetParent === null) continue;
-        const usesSlash = v.includes('/');
         if (!startSet && (/start|str|from/i.test(id + name) || v <= sDash)) {
-          setInput(el, usesSlash ? sSlash : sDash);
-          log.push(`start fallback ${id||name}: "${v}" -> "${el.value}"`);
+          const r = setDateField(el, sDash, sSlash);
+          log.push(`start fallback ${id||name}: ${r}`);
           startSet = true;
         } else if (!endSet) {
-          setInput(el, usesSlash ? eSlash : eDash);
-          log.push(`end fallback ${id||name}: "${v}" -> "${el.value}"`);
+          const r = setDateField(el, eDash, eSlash);
+          log.push(`end fallback ${id||name}: ${r}`);
           endSet = true;
         }
       }
     }
 
-    log.push(`set: start=${startSet}, end=${endSet}`);
+    // 설정 후 최종 확인
+    const verify = [];
+    for (const id of [...startIds, ...endIds]) {
+      const el = document.getElementById(id);
+      if (el) verify.push(`${id}="${el.value}"`);
+    }
+    log.push(`verify: ${verify.join(', ')}`);
+    log.push(`set: start=${startSet}, end=${endSet}, jQuery=${typeof $ !== 'undefined'}`);
 
     try { if (typeof fn_search === 'function') { fn_search(); log.push('fn_search()'); return log; } } catch (e) { log.push('fn_search err: ' + e.message); }
     try { if (typeof fn_Search === 'function') { fn_Search(); log.push('fn_Search()'); return log; } } catch (e) { log.push('fn_Search err: ' + e.message); }
@@ -487,14 +509,82 @@ async function setDateRange(frame, startDate, endDate) {
 
   await page.waitForTimeout(1500);
 
-  const afterCheck = await frame.evaluate(() => {
+  const afterCheck = await frame.evaluate(({ sDash, eDash, sSlash, eSlash }) => {
     const fields = ['txtSrcStartDt', 'txtSrcEndDt', 'txtDtlSrcStartDt', 'txtDtlSrcEndDt'];
-    const vals = fields.map(id => { const el = document.getElementById(id); return el ? id + '=' + el.value : null; }).filter(Boolean);
+    const vals = fields.map(id => { const el = document.getElementById(id); return el ? { id, value: el.value } : null; }).filter(Boolean);
     const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
-    vals.push('clients:' + links.length);
-    return vals.join(', ');
-  });
-  logger.info(`조회 후: ${afterCheck}`);
+
+    const startField = vals.find(v => /start|str/i.test(v.id));
+    const endField = vals.find(v => /end/i.test(v.id));
+    const startOk = startField && (startField.value === sDash || startField.value === sSlash);
+    const endOk = endField && (endField.value === eDash || endField.value === eSlash);
+
+    return {
+      fields: vals.map(v => `${v.id}=${v.value}`).join(', '),
+      clients: links.length,
+      startOk,
+      endOk,
+    };
+  }, { sDash: startDash, eDash: endDash, sSlash: startSlash, eSlash: endSlash });
+
+  logger.info(`조회 후: ${afterCheck.fields}, clients:${afterCheck.clients}, dateOk:start=${afterCheck.startOk},end=${afterCheck.endOk}`);
+
+  if (!afterCheck.startOk || !afterCheck.endOk) {
+    logger.warn('날짜가 리셋됨! Playwright type()으로 재설정 후 재조회...');
+
+    const startSelectors = ['#txtSrcStartDt', '#txtDtlSrcStartDt'];
+    const endSelectors = ['#txtSrcEndDt', '#txtDtlSrcEndDt'];
+
+    for (const sel of startSelectors) {
+      const el = frame.locator(sel).first();
+      if (await el.count() > 0) {
+        const curVal = await el.inputValue().catch(() => '');
+        const usesSlash = curVal.includes('/');
+        await el.click({ force: true }).catch(() => null);
+        await el.fill('');
+        await el.type(usesSlash ? startSlash : startDash, { delay: 30 });
+        await el.dispatchEvent('change');
+        logger.info(`시작일 재설정(${sel}): ${usesSlash ? startSlash : startDash}`);
+        break;
+      }
+    }
+    for (const sel of endSelectors) {
+      const el = frame.locator(sel).first();
+      if (await el.count() > 0) {
+        const curVal = await el.inputValue().catch(() => '');
+        const usesSlash = curVal.includes('/');
+        await el.click({ force: true }).catch(() => null);
+        await el.fill('');
+        await el.type(usesSlash ? endSlash : endDash, { delay: 30 });
+        await el.dispatchEvent('change');
+        logger.info(`종료일 재설정(${sel}): ${usesSlash ? endSlash : endDash}`);
+        break;
+      }
+    }
+
+    await page.waitForTimeout(300);
+
+    await frame.evaluate(() => {
+      try { if (typeof fn_search === 'function') { fn_search(); return; } } catch {}
+      try { if (typeof fn_Search === 'function') { fn_Search(); return; } } catch {}
+      const btns = document.querySelectorAll('[onclick], button, a');
+      for (const btn of btns) {
+        const txt = (btn.textContent?.trim() || btn.value || '');
+        if (txt === '조회' || txt === '검색') { btn.click(); return; }
+      }
+    });
+    logger.info('재조회 실행');
+
+    await page.waitForTimeout(2000);
+
+    const recheck = await frame.evaluate(() => {
+      const fields = ['txtSrcStartDt', 'txtSrcEndDt', 'txtDtlSrcStartDt', 'txtDtlSrcEndDt'];
+      const vals = fields.map(id => { const el = document.getElementById(id); return el ? `${id}=${el.value}` : null; }).filter(Boolean);
+      const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
+      return vals.join(', ') + `, clients:${links.length}`;
+    });
+    logger.info(`재조회 후: ${recheck}`);
+  }
 }
 
 async function collectSalesData(options = {}) {
