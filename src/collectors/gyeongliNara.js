@@ -324,317 +324,169 @@ async function navigateToMenu(menuId) {
 }
 
 async function scrollToLoadAll(target, label = '') {
-  const maxAttempts = 15;
-
-  const scrollInfo = await target.evaluate(() => {
-    const candidates = [];
-    const allEls = document.querySelectorAll('div, tbody, table, section, main, article');
-    for (const el of allEls) {
-      const style = getComputedStyle(el);
-      const isScrollable = (style.overflowY === 'scroll' || style.overflowY === 'auto') && el.scrollHeight > el.clientHeight + 10;
-      if (isScrollable) {
-        candidates.push({
-          tag: el.tagName,
-          id: el.id || '',
-          cls: el.className?.toString().substring(0, 50) || '',
-          scrollHeight: el.scrollHeight,
-          clientHeight: el.clientHeight,
-          diff: el.scrollHeight - el.clientHeight,
-        });
-      }
-    }
-    const docEl = document.scrollingElement || document.documentElement;
-    return {
-      docScrollHeight: docEl.scrollHeight,
-      docClientHeight: docEl.clientHeight,
-      scrollableContainers: candidates.sort((a, b) => b.diff - a.diff).slice(0, 5),
-    };
-  }).catch(() => ({ docScrollHeight: 0, docClientHeight: 0, scrollableContainers: [] }));
-
-  logger.info(`${label}: 문서 높이 ${scrollInfo.docScrollHeight}px, 스크롤 가능 컨테이너 ${scrollInfo.scrollableContainers.length}개`);
-  if (scrollInfo.scrollableContainers.length > 0) {
-    logger.info(`${label}: 컨테이너 목록: ${scrollInfo.scrollableContainers.map(c => `${c.tag}#${c.id}(${c.diff}px)`).join(', ')}`);
-  }
-
   let prevRowCount = 0;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const result = await target.evaluate(() => {
-      const containers = [];
-      const allEls = document.querySelectorAll('div, tbody, table, section');
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const info = await target.evaluate(() => {
+      const allEls = document.querySelectorAll('div, section');
       for (const el of allEls) {
         const style = getComputedStyle(el);
         if ((style.overflowY === 'scroll' || style.overflowY === 'auto') && el.scrollHeight > el.clientHeight + 10) {
-          containers.push(el);
-        }
-      }
-
-      let scrolled = false;
-      for (const el of containers) {
-        if (el.scrollTop < el.scrollHeight - el.clientHeight - 5) {
           el.scrollTop = el.scrollHeight;
-          scrolled = true;
         }
       }
-
       const docEl = document.scrollingElement || document.documentElement;
-      if (docEl.scrollTop < docEl.scrollHeight - docEl.clientHeight - 5) {
-        docEl.scrollTop = docEl.scrollHeight;
-        scrolled = true;
-      }
-
+      docEl.scrollTop = docEl.scrollHeight;
       window.scrollTo(0, document.body.scrollHeight);
+      return document.querySelectorAll('tr').length;
+    }).catch(() => 0);
 
-      const rows = document.querySelectorAll('tr');
-      return { scrolled, rowCount: rows.length, docHeight: docEl.scrollHeight };
-    }).catch(() => ({ scrolled: false, rowCount: 0, docHeight: 0 }));
-
-    if (attempt > 0 && result.rowCount === prevRowCount && !result.scrolled) {
-      logger.info(`${label}: 스크롤 완료 (${attempt}회, ${result.rowCount}행)`);
-      break;
-    }
-    prevRowCount = result.rowCount;
-    await page.waitForTimeout(2000);
+    if (attempt > 0 && info === prevRowCount) break;
+    prevRowCount = info;
+    await page.waitForTimeout(1000);
   }
-
-  const pageNav = await target.evaluate(() => {
-    const btns = document.querySelectorAll('a, button, input[type="button"], span');
-    const pageButtons = [];
-    for (const btn of btns) {
-      const txt = (btn.textContent?.trim() || btn.value || '');
-      if (/^[2-9]$|^1[0-9]$|^다음|^next|^▶|^>$/i.test(txt)) {
-        pageButtons.push({ text: txt, tag: btn.tagName, onclick: btn.getAttribute('onclick') || '' });
-      }
-    }
-    return pageButtons;
-  }).catch(() => []);
-
-  if (pageNav.length > 0) {
-    logger.info(`${label}: 페이지네이션 버튼 발견 ${pageNav.length}개: ${pageNav.map(p => p.text).join(', ')}`);
-
-    for (const navBtn of pageNav) {
-      if (/^[2-9]$|^1[0-9]$/.test(navBtn.text)) {
-        logger.info(`${label}: 페이지 ${navBtn.text} 이동`);
-        await target.evaluate((onclick) => {
-          if (onclick) {
-            const fn = new Function(onclick);
-            fn();
-          }
-        }, navBtn.onclick).catch(() => null);
-        await page.waitForTimeout(3000);
-      }
-    }
-  }
-
-  await target.evaluate(() => {
-    const docEl = document.scrollingElement || document.documentElement;
-    docEl.scrollTop = 0;
-    window.scrollTo(0, 0);
-  }).catch(() => null);
 }
 
 async function setDateRange(frame, startDate, endDate) {
   if (!startDate && !endDate) return;
 
-  const formatDate = (d) => (d || '').replace(/\//g, '-');
-  const fmtStart = formatDate(startDate);
-  const fmtEnd = formatDate(endDate);
+  const fmtDash = (d) => (d || '').replace(/\//g, '-');
+  const fmtSlash = (d) => (d || '').replace(/-/g, '/');
+  const startDash = fmtDash(startDate);
+  const endDash = fmtDash(endDate);
+  const startSlash = fmtSlash(startDate);
+  const endSlash = fmtSlash(endDate);
 
-  logger.info(`날짜 범위 설정: ${fmtStart || '(기본)'} ~ ${fmtEnd || '(기본)'}`);
+  logger.info(`날짜 범위 설정: ${startDash} ~ ${endDash}`);
 
-  const setResult = await frame.evaluate(({ start, end }) => {
-    const log = [];
-    const ids = [
-      ['txtSrcStartDt', 'txtSrcEndDt'],
-      ['txtDtlSrcStartDt', 'txtDtlSrcEndDt'],
-    ];
-    const names = [
-      ['STR_DT', 'END_DT'],
-    ];
-
-    function setField(el, val) {
-      if (!el || !val) return false;
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype, 'value'
-      )?.set;
-      if (nativeSetter) {
-        nativeSetter.call(el, val);
-      } else {
-        el.value = val;
-      }
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      el.dispatchEvent(new Event('blur', { bubbles: true }));
-      return true;
-    }
-
-    let setCount = 0;
-    const touched = new Set();
-
-    for (const [startId, endId] of ids) {
-      const startEl = document.getElementById(startId);
-      const endEl = document.getElementById(endId);
-      if (startEl && start) {
-        const before = startEl.value;
-        setField(startEl, start);
-        log.push(`${startId}: "${before}" → "${start}"`);
-        touched.add(startEl);
-        setCount++;
-      }
-      if (endEl && end) {
-        const before = endEl.value;
-        setField(endEl, end);
-        log.push(`${endId}: "${before}" → "${end}"`);
-        touched.add(endEl);
-        setCount++;
+  const dateInputInfo = await frame.evaluate(() => {
+    const inputs = [];
+    const allInputs = document.querySelectorAll('input[type="text"], input:not([type])');
+    for (const el of allInputs) {
+      const v = el.value || '';
+      const id = el.id || '';
+      const name = el.name || '';
+      const hasDp = el.classList.contains('hasDatepicker');
+      const looksDate = /\d{4}[-/]\d{2}[-/]\d{2}/.test(v);
+      if (id || name || hasDp || looksDate) {
+        inputs.push({ id, name, value: v, hasDp, looksDate, visible: el.offsetParent !== null });
       }
     }
+    return inputs;
+  });
 
-    for (const [startName, endName] of names) {
-      const startEl = document.querySelector(`input[name="${startName}"]`);
-      const endEl = document.querySelector(`input[name="${endName}"]`);
-      if (startEl && start && !touched.has(startEl)) {
-        setField(startEl, start);
-        log.push(`name=${startName}: → "${start}"`);
-        touched.add(startEl);
+  logger.info(`페이지 input 필드 스캔: ${dateInputInfo.length}개`);
+  const dateFields = dateInputInfo.filter(i => i.looksDate || i.hasDp || /date|dt|일자/i.test(i.id + i.name));
+  for (const f of dateFields) {
+    logger.info(`  날짜 필드: id=${f.id} name=${f.name} value="${f.value}" datepicker=${f.hasDp} visible=${f.visible}`);
+  }
+
+  const usesSlash = dateFields.some(f => f.value.includes('/'));
+  const startVal = usesSlash ? startSlash : startDash;
+  const endVal = usesSlash ? endSlash : endDash;
+  logger.info(`날짜 포맷: ${usesSlash ? 'YYYY/MM/DD' : 'YYYY-MM-DD'}`);
+
+  const startSelectors = ['#txtSrcStartDt', '#txtDtlSrcStartDt', 'input[name="STR_DT"]'];
+  const endSelectors = ['#txtSrcEndDt', '#txtDtlSrcEndDt', 'input[name="END_DT"]'];
+
+  let setCount = 0;
+
+  for (const sel of startSelectors) {
+    try {
+      const el = frame.locator(sel).first();
+      if (await el.count() > 0) {
+        const before = await el.inputValue().catch(() => '');
+        await el.click({ force: true }).catch(() => null);
+        await el.fill('');
+        await el.type(startVal, { delay: 30 });
+        await el.dispatchEvent('change');
+        await el.dispatchEvent('blur');
+        logger.info(`시작일 설정(${sel}): "${before}" → "${startVal}"`);
         setCount++;
+        break;
       }
-      if (endEl && end && !touched.has(endEl)) {
-        setField(endEl, end);
-        log.push(`name=${endName}: → "${end}"`);
-        touched.add(endEl);
+    } catch (e) { logger.warn(`시작일 ${sel} 실패: ${e.message}`); }
+  }
+
+  for (const sel of endSelectors) {
+    try {
+      const el = frame.locator(sel).first();
+      if (await el.count() > 0) {
+        const before = await el.inputValue().catch(() => '');
+        await el.click({ force: true }).catch(() => null);
+        await el.fill('');
+        await el.type(endVal, { delay: 30 });
+        await el.dispatchEvent('change');
+        await el.dispatchEvent('blur');
+        logger.info(`종료일 설정(${sel}): "${before}" → "${endVal}"`);
         setCount++;
+        break;
       }
+    } catch (e) { logger.warn(`종료일 ${sel} 실패: ${e.message}`); }
+  }
+
+  if (setCount === 0) {
+    for (const f of dateFields) {
+      if (!f.visible || setCount >= 2) continue;
+      const sel = f.id ? `#${f.id}` : (f.name ? `input[name="${f.name}"]` : null);
+      if (!sel) continue;
+      try {
+        const el = frame.locator(sel).first();
+        const isStart = /start|str|from|시작/i.test(f.id + f.name) || f.value <= startVal;
+        const val = isStart ? startVal : endVal;
+        await el.click({ force: true }).catch(() => null);
+        await el.fill('');
+        await el.type(val, { delay: 30 });
+        await el.dispatchEvent('change');
+        logger.info(`날짜 필드 설정(${sel}): "${f.value}" → "${val}"`);
+        setCount++;
+      } catch (e) { logger.warn(`날짜 필드 ${sel} 실패: ${e.message}`); }
     }
+  }
 
-    const pickers = document.querySelectorAll('input.hasDatepicker');
-    for (const el of pickers) {
-      if (touched.has(el)) continue;
-      const elId = el.id || el.name || '';
-      const isStart = /start|str|from|시작/i.test(elId);
-      const isEnd = /end|to|종료/i.test(elId);
-      const val = isStart ? start : isEnd ? end : null;
-      if (val) {
-        const before = el.value;
-        setField(el, val);
-        log.push(`datepicker(${elId || 'noId'}): "${before}" → "${val}"`);
-        touched.add(el);
-        setCount++;
-      } else if (el.value) {
-        log.push(`datepicker(${elId || 'noId'}) 유지: "${el.value}"`);
-      }
-    }
-
-    const allDateInputs = document.querySelectorAll('input[type="text"]');
-    for (const el of allDateInputs) {
-      if (touched.has(el)) continue;
-      if (!/\d{4}-\d{2}-\d{2}/.test(el.value)) continue;
-      const elId = el.id || el.name || '';
-      const isStart = /start|str|from|시작/i.test(elId) || el.value <= start;
-      const val = isStart ? start : end;
-      if (val && el.value !== val) {
-        const before = el.value;
-        setField(el, val);
-        log.push(`날짜input(${elId || 'noId'}): "${before}" → "${val}"`);
-        touched.add(el);
-        setCount++;
-      }
-    }
-
-    return { log, setCount };
-  }, { start: fmtStart, end: fmtEnd });
-
-  logger.info(`날짜 설정: ${setResult.log.join(' | ')}`);
-
-  if (setResult.setCount === 0) {
+  if (setCount === 0) {
     logger.error('날짜 필드를 하나도 설정하지 못했습니다!');
     return;
   }
 
   await page.waitForTimeout(500);
 
+  const verifyBefore = await frame.evaluate(() => {
+    const fields = ['txtSrcStartDt', 'txtSrcEndDt', 'txtDtlSrcStartDt', 'txtDtlSrcEndDt'];
+    return fields.map(id => { const el = document.getElementById(id); return el ? `${id}="${el.value}"` : null; }).filter(Boolean).join(', ');
+  });
+  logger.info(`조회 전 날짜 값: ${verifyBefore}`);
+
   const searchResult = await frame.evaluate(() => {
     const log = [];
-
-    try {
-      if (typeof fn_search === 'function') { fn_search(); log.push('fn_search() 호출 성공'); return log; }
-    } catch (e) { log.push(`fn_search 오류: ${e.message}`); }
-    try {
-      if (typeof fn_Search === 'function') { fn_Search(); log.push('fn_Search() 호출 성공'); return log; }
-    } catch (e) { log.push(`fn_Search 오류: ${e.message}`); }
-    try {
-      if (typeof doSearch === 'function') { doSearch(); log.push('doSearch() 호출 성공'); return log; }
-    } catch (e) { log.push(`doSearch 오류: ${e.message}`); }
+    try { if (typeof fn_search === 'function') { fn_search(); log.push('fn_search()'); return log; } } catch (e) { log.push(`fn_search err: ${e.message}`); }
+    try { if (typeof fn_Search === 'function') { fn_Search(); log.push('fn_Search()'); return log; } } catch (e) { log.push(`fn_Search err: ${e.message}`); }
+    try { if (typeof doSearch === 'function') { doSearch(); log.push('doSearch()'); return log; } } catch (e) { log.push(`doSearch err: ${e.message}`); }
 
     const allEls = document.querySelectorAll('[onclick]');
     for (const el of allEls) {
       const oc = el.getAttribute('onclick') || '';
-      if (oc.includes('fn_search') || oc.includes('fn_Search') || oc.includes('doSearch')) {
-        el.click();
-        log.push(`onclick 클릭: ${oc.substring(0, 50)}`);
-        return log;
-      }
+      if (/fn_search|fn_Search|doSearch/.test(oc)) { el.click(); log.push(`onclick: ${oc.substring(0, 50)}`); return log; }
     }
-
     const btns = document.querySelectorAll('button, a, input[type="button"], img, span');
     for (const btn of btns) {
       const txt = (btn.textContent?.trim() || btn.value || btn.alt || btn.title || '');
-      if (txt === '조회' || txt === '검색') {
-        btn.click();
-        log.push(`텍스트 클릭: "${txt}"`);
-        return log;
-      }
+      if (txt === '조회' || txt === '검색') { btn.click(); log.push(`클릭: "${txt}"`); return log; }
     }
-
-    log.push('조회 버튼/함수를 찾지 못함');
+    log.push('조회 함수/버튼 미발견');
     return log;
   });
-
   logger.info(`검색 실행: ${searchResult.join(' | ')}`);
 
-  const linkCountBefore = await frame.evaluate(() => {
-    return document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]').length;
-  });
+  await page.waitForTimeout(5000);
 
-  try {
-    await frame.waitForFunction(
-      (prevCount) => {
-        const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
-        const tables = document.querySelectorAll('table');
-        const anyTableChanged = Array.from(tables).some(t => t.rows.length > 2);
-        return links.length !== prevCount || anyTableChanged;
-      },
-      linkCountBefore,
-      { timeout: 8000 },
-    );
-    logger.info('조회 결과 DOM 변화 감지됨');
-  } catch {
-    logger.warn('DOM 변화 대기 타임아웃(8초) — 기본 대기(4초)로 fallback');
-    await page.waitForTimeout(4000);
-  }
-
-  const afterCheck = await frame.evaluate(({ expectStart, expectEnd }) => {
+  const afterCheck = await frame.evaluate(() => {
     const fields = ['txtSrcStartDt', 'txtSrcEndDt', 'txtDtlSrcStartDt', 'txtDtlSrcEndDt'];
-    const vals = [];
-    let mismatch = false;
-
-    for (const id of fields) {
-      const el = document.getElementById(id);
-      if (!el) continue;
-      vals.push(`${id}="${el.value}"`);
-      if (/start|str/i.test(id) && expectStart && el.value !== expectStart) mismatch = true;
-      if (/end/i.test(id) && expectEnd && el.value !== expectEnd) mismatch = true;
-    }
-
+    const vals = fields.map(id => { const el = document.getElementById(id); return el ? `${id}="${el.value}"` : null; }).filter(Boolean);
     const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
-    vals.push(`거래처 링크: ${links.length}개`);
-    return { summary: vals.join(', '), mismatch, linkCount: links.length };
-  }, { expectStart: fmtStart, expectEnd: fmtEnd });
-
-  if (afterCheck.mismatch) {
-    logger.warn(`날짜 범위 불일치 감지! 요청: ${fmtStart}~${fmtEnd} / 실제: ${afterCheck.summary}`);
-  } else {
-    logger.info(`조회 후 상태: ${afterCheck.summary}`);
-  }
+    vals.push(`거래처: ${links.length}개`);
+    return vals.join(', ');
+  });
+  logger.info(`조회 후 상태: ${afterCheck}`);
 }
 
 async function collectSalesData(options = {}) {
