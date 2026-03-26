@@ -628,7 +628,7 @@ async function collectSalesData(options = {}) {
 
       try {
         logger.info(`거래처 수집: ${client.name}`);
-        const clientDetail = await openClientPopupAndExtract(frame, client);
+        const clientDetail = await fetchClientData(frame, client);
         if (clientDetail) {
           salesData.push(clientDetail);
           logger.info(`  → ${client.name}: ${clientDetail.items.length}개 품목, 합계 ${clientDetail.totalAmount}`);
@@ -665,7 +665,168 @@ async function collectSalesData(options = {}) {
   }
 }
 
-async function openClientPopupAndExtract(frame, client) {
+const PARSE_POPUP_JS = `(function(doc) {
+  var result = {
+    client: '', date: '', items: [],
+    prevBalance: 0, totalSupply: 0, totalVat: 0,
+    totalAmount: 0, depositAmount: 0, outstandingBalance: 0,
+  };
+  var tables = doc.querySelectorAll('table');
+  for (var ti = 0; ti < tables.length; ti++) {
+    var rows = tables[ti].querySelectorAll('tr');
+    for (var ri = 0; ri < rows.length; ri++) {
+      var cells = Array.from(rows[ri].querySelectorAll('td, th'));
+      var texts = cells.map(function(c) { return c.textContent.trim(); });
+      var clientIdx = texts.findIndex(function(t) { return t.includes('거 래 처') || t.includes('거래처'); });
+      if (clientIdx >= 0 && clientIdx < texts.length - 1) result.client = texts[clientIdx + 1] || '';
+      var dateIdx = texts.findIndex(function(t) { return (t.includes('일') && t.includes('자')) && !t.includes('품'); });
+      if (dateIdx >= 0 && dateIdx < texts.length - 1) result.date = texts[dateIdx + 1] || '';
+    }
+  }
+  var itemTable = null;
+  for (var ti2 = 0; ti2 < tables.length; ti2++) {
+    var txt = tables[ti2].textContent || '';
+    if ((txt.includes('품목') || txt.includes('품 목')) &&
+        (txt.includes('수량') || txt.includes('수 량')) &&
+        (txt.includes('단가') || txt.includes('단 가'))) { itemTable = tables[ti2]; break; }
+  }
+  if (itemTable) {
+    var irows = itemTable.querySelectorAll('tr');
+    var colMap = {};
+    var headerFound = false;
+    var colPatterns = {
+      date: ['월일','일자','월 일','일 자'], product: ['품목','품 목','상품명'],
+      spec: ['규격','규 격'], unit: ['단위','단 위'], qty: ['수량','수 량'],
+      unitPrice: ['단가','단 가'], supply: ['공급가액','공급가','공 급 가 액'],
+      vat: ['세액','세 액','부가세','부가'], note: ['비고','비 고'],
+    };
+    for (var iri = 0; iri < irows.length; iri++) {
+      var icells = Array.from(irows[iri].querySelectorAll('td, th'));
+      var itexts = icells.map(function(c) { return c.textContent.trim().replace(/\\s+/g,''); });
+      if (itexts.some(function(t){return t.includes('품목');}) && itexts.some(function(t){return t.includes('수량');})) {
+        for (var ci = 0; ci < itexts.length; ci++) {
+          var ct = itexts[ci];
+          var keys = Object.keys(colPatterns);
+          for (var ki = 0; ki < keys.length; ki++) {
+            var ps = colPatterns[keys[ki]];
+            if (ps.some(function(p){return ct.replace(/\\s/g,'').includes(p.replace(/\\s/g,''));})) colMap[keys[ki]] = ci;
+          }
+        }
+        headerFound = true; continue;
+      }
+      if (!headerFound) continue;
+      if (itexts.length < 4) continue;
+      if (itexts.every(function(t){return !t || t==='';})) continue;
+      if (itexts.some(function(t){return t.includes('합계') || t.includes('소계');})) continue;
+      var get = function(key) { return (colMap[key] !== undefined ? itexts[colMap[key]] : '') || ''; };
+      var pn = function(s) { return parseFloat((s||'').replace(/[,\\s]/g,'')) || 0; };
+      var product = get('product');
+      var dateCell = get('date');
+      if (product && product.length > 0 && product !== dateCell) {
+        result.items.push({
+          deliveryDate: dateCell, product: product,
+          spec: get('spec'), qty: pn(get('qty')),
+          unitPrice: pn(get('unitPrice')), supplyAmount: pn(get('supply')),
+          vat: pn(get('vat')), total: pn(get('supply')) + pn(get('vat')),
+          note: get('note'),
+        });
+      }
+    }
+    result._colMap = colMap;
+  }
+  for (var ti3 = 0; ti3 < tables.length; ti3++) {
+    var srows = tables[ti3].querySelectorAll('tr');
+    for (var sri = 0; sri < srows.length; sri++) {
+      var text = srows[sri].textContent || '';
+      var pn2 = function(s) { return parseFloat((s||'').replace(/[,\\s]/g,'')) || 0; };
+      if (text.includes('전미수잔액')) {
+        var nums = text.match(/[\\d,]+/g);
+        if (nums) result.prevBalance = pn2(nums[nums.length-1]);
+      }
+      if (text.includes('합계') && !text.includes('총합계') && !text.includes('전미수')) {
+        var vals = Array.from(srows[sri].querySelectorAll('td')).map(function(c){return c.textContent.trim();}).filter(function(t){return /^[\\d,]+$/.test(t);});
+        if (vals.length >= 2) { result.totalSupply = pn2(vals[0]); result.totalVat = pn2(vals[1]); }
+      }
+      if (text.includes('총합계') || text.includes('합계금액')) {
+        var m = text.match(/([\\d,]+)\\s*$/);
+        if (m) result.totalAmount = pn2(m[1]);
+      }
+      if (text.includes('입금액')) {
+        var dvals = Array.from(srows[sri].querySelectorAll('td')).map(function(c){return c.textContent.trim().replace(/[,\\s]/g,'');}).filter(function(v){return /^\\d+$/.test(v) && parseInt(v)>0;});
+        if (dvals.length > 0) result.depositAmount = parseFloat(dvals[0]) || 0;
+      }
+      if (text.includes('총미수잔액') || text.includes('미수잔액')) {
+        var ovals = Array.from(srows[sri].querySelectorAll('td')).map(function(c){return c.textContent.trim().replace(/[,\\s]/g,'');}).filter(function(v){return /^\\d+$/.test(v) && parseInt(v)>0;});
+        if (ovals.length > 0) result.outstandingBalance = parseFloat(ovals[0]) || 0;
+      }
+    }
+  }
+  result.totalAmount = result.totalAmount || result.items.reduce(function(s,i){return s+i.total;},0);
+  return result;
+})`;
+
+async function fetchClientData(frame, client) {
+  const capturedUrl = await frame.evaluate((onclick) => {
+    return new Promise((resolve) => {
+      const origOpen = window.open;
+      window.open = function(url) {
+        window.open = origOpen;
+        resolve(url);
+        return null;
+      };
+      try {
+        const fn = new Function(onclick);
+        fn();
+      } catch {
+        window.open = origOpen;
+        resolve(null);
+      }
+      setTimeout(() => { window.open = origOpen; resolve(null); }, 500);
+    });
+  }, client.onclick);
+
+  if (!capturedUrl) {
+    logger.warn(`${client.name}: URL 캡처 실패, 팝업 fallback`);
+    return openClientPopupFallback(frame, client);
+  }
+
+  const fullUrl = capturedUrl.startsWith('http')
+    ? capturedUrl
+    : `${BASE_URL}${capturedUrl.startsWith('/') ? '' : '/'}${capturedUrl}`;
+  logger.info(`${client.name}: fetch URL = ${fullUrl}`);
+  appendNetLog(`[FETCH] ${client.name}: ${fullUrl}`);
+
+  const data = await frame.evaluate(async ({ url, parseCode }) => {
+    try {
+      const resp = await fetch(url, { credentials: 'include' });
+      if (!resp.ok) return { _fetchError: 'HTTP ' + resp.status };
+      const html = await resp.text();
+      if (!html || html.length < 100) return { _fetchError: 'empty response' };
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const parseFn = eval(parseCode);
+      return parseFn(doc);
+    } catch (e) {
+      return { _fetchError: e.message };
+    }
+  }, { url: fullUrl, parseCode: PARSE_POPUP_JS });
+
+  if (data && data._fetchError) {
+    logger.warn(`${client.name}: fetch 실패 (${data._fetchError}), 팝업 fallback`);
+    return openClientPopupFallback(frame, client);
+  }
+
+  if (!data || (!data.items?.length && !data.totalAmount)) {
+    logger.warn(`${client.name}: fetch 데이터 부족, 팝업 fallback`);
+    return openClientPopupFallback(frame, client);
+  }
+
+  if (!data.client) data.client = client.name;
+  logger.info(`${client.name}: fetch 성공 (${data.items?.length || 0}건)`);
+  return data;
+}
+
+async function openClientPopupFallback(frame, client) {
   const popupPromise = context.waitForEvent('page', { timeout: 8000 });
 
   await frame.evaluate((onclick) => {
@@ -685,164 +846,16 @@ async function openClientPopupAndExtract(frame, client) {
 
   await scrollToLoadAll(popup, `팝업(${client.name})`);
 
-  const data = await popup.evaluate(() => {
-    const result = {
-      client: '',
-      date: '',
-      items: [],
-      prevBalance: 0,
-      totalSupply: 0,
-      totalVat: 0,
-      totalAmount: 0,
-      depositAmount: 0,
-      outstandingBalance: 0,
-    };
-
-    const tables = document.querySelectorAll('table');
-
-    for (const table of tables) {
-      const rows = table.querySelectorAll('tr');
-      for (const row of rows) {
-        const cells = Array.from(row.querySelectorAll('td, th'));
-        const texts = cells.map(c => c.textContent.trim());
-
-        const clientIdx = texts.findIndex(t =>
-          t.includes('거 래 처') || t.includes('거래처'));
-        if (clientIdx >= 0 && clientIdx < texts.length - 1) {
-          result.client = texts[clientIdx + 1] || '';
-        }
-
-        const dateIdx = texts.findIndex(t =>
-          (t.includes('일') && t.includes('자')) && !t.includes('품'));
-        if (dateIdx >= 0 && dateIdx < texts.length - 1) {
-          result.date = texts[dateIdx + 1] || '';
-        }
-      }
-    }
-
-    let itemTable = null;
-    for (const table of tables) {
-      const txt = table.textContent || '';
-      if ((txt.includes('품목') || txt.includes('품 목')) &&
-          (txt.includes('수량') || txt.includes('수 량')) &&
-          (txt.includes('단가') || txt.includes('단 가'))) {
-        itemTable = table;
-        break;
-      }
-    }
-
-    if (itemTable) {
-      const rows = itemTable.querySelectorAll('tr');
-      const colMap = {};
-      let headerFound = false;
-
-      const colPatterns = {
-        date: ['월일', '일자', '월 일', '일 자'],
-        product: ['품목', '품 목', '상품명'],
-        spec: ['규격', '규 격'],
-        unit: ['단위', '단 위'],
-        qty: ['수량', '수 량'],
-        unitPrice: ['단가', '단 가'],
-        supply: ['공급가액', '공급가', '공 급 가 액'],
-        vat: ['세액', '세 액', '부가세', '부가'],
-        note: ['비고', '비 고'],
-      };
-
-      for (const row of rows) {
-        const cells = Array.from(row.querySelectorAll('td, th'));
-        const texts = cells.map(c => c.textContent.trim().replace(/\s+/g, ''));
-
-        const hasProduct = texts.some(t => t.includes('품목'));
-        const hasQty = texts.some(t => t.includes('수량'));
-
-        if (hasProduct && hasQty) {
-          for (let i = 0; i < texts.length; i++) {
-            const cellText = texts[i];
-            for (const [key, patterns] of Object.entries(colPatterns)) {
-              if (patterns.some(p => cellText.replace(/\s/g, '').includes(p.replace(/\s/g, '')))) {
-                colMap[key] = i;
-              }
-            }
-          }
-          headerFound = true;
-          continue;
-        }
-
-        if (!headerFound) continue;
-        if (texts.length < 4) continue;
-        if (texts.every(t => !t || t === '')) continue;
-        if (texts.some(t => t.includes('합계') || t.includes('소계'))) continue;
-
-        const get = (key) => (colMap[key] !== undefined ? texts[colMap[key]] : '') || '';
-        const pn = (s) => parseFloat((s || '').replace(/[,\s]/g, '')) || 0;
-
-        const product = get('product');
-        const dateCell = get('date');
-
-        if (product && product.length > 0 && product !== dateCell) {
-          result.items.push({
-            deliveryDate: dateCell,
-            product,
-            spec: get('spec'),
-            qty: pn(get('qty')),
-            unitPrice: pn(get('unitPrice')),
-            supplyAmount: pn(get('supply')),
-            vat: pn(get('vat')),
-            total: pn(get('supply')) + pn(get('vat')),
-            note: get('note'),
-          });
-        }
-      }
-
-      result._colMap = colMap;
-    }
-
-    for (const table of tables) {
-      for (const row of table.querySelectorAll('tr')) {
-        const text = row.textContent || '';
-        const pn = (s) => parseFloat((s || '').replace(/[,\s]/g, '')) || 0;
-
-        if (text.includes('전미수잔액')) {
-          const nums = text.match(/[\d,]+/g);
-          if (nums) result.prevBalance = pn(nums[nums.length - 1]);
-        }
-        if (text.includes('합계') && !text.includes('총합계') && !text.includes('전미수')) {
-          const vals = Array.from(row.querySelectorAll('td'))
-            .map(c => c.textContent.trim()).filter(t => /^[\d,]+$/.test(t));
-          if (vals.length >= 2) {
-            result.totalSupply = pn(vals[0]);
-            result.totalVat = pn(vals[1]);
-          }
-        }
-        if (text.includes('총합계') || text.includes('합계금액')) {
-          const m = text.match(/([\d,]+)\s*$/);
-          if (m) result.totalAmount = pn(m[1]);
-        }
-        if (text.includes('입금액')) {
-          const vals = Array.from(row.querySelectorAll('td'))
-            .map(c => c.textContent.trim().replace(/[,\s]/g, ''))
-            .filter(v => /^\d+$/.test(v) && parseInt(v) > 0);
-          if (vals.length > 0) result.depositAmount = parseFloat(vals[0]) || 0;
-        }
-        if (text.includes('총미수잔액') || text.includes('미수잔액')) {
-          const vals = Array.from(row.querySelectorAll('td'))
-            .map(c => c.textContent.trim().replace(/[,\s]/g, ''))
-            .filter(v => /^\d+$/.test(v) && parseInt(v) > 0);
-          if (vals.length > 0) result.outstandingBalance = parseFloat(vals[0]) || 0;
-        }
-      }
-    }
-
-    result.totalAmount = result.totalAmount ||
-      result.items.reduce((s, i) => s + i.total, 0);
-
-    return result;
-  });
+  const data = await popup.evaluate((parseCode) => {
+    const parseFn = eval(parseCode);
+    return parseFn(document);
+  }, PARSE_POPUP_JS);
 
   await popup.close().catch(() => null);
   await page.waitForTimeout(100);
 
   if (!data.client) data.client = client.name;
+  logger.info(`${client.name}: 팝업 fallback 성공 (${data.items?.length || 0}건)`);
   return data;
 }
 
