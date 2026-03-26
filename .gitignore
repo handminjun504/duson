@@ -3,6 +3,7 @@ node_modules/
 output/
 config/google-credentials.json
 *.log
+logs/
 read_excel.js
 read_excel_all.js
 .browser-data/

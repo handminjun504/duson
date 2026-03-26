@@ -1,9 +1,19 @@
 const { chromium } = require('playwright');
 const path = require('path');
+const fs = require('fs');
 const logger = require('../utils/logger');
 
 const BASE_URL = 'https://ai.serp.co.kr';
 const USER_DATA_DIR = path.join(__dirname, '..', '..', '.browser-data');
+const NET_LOG_PATH = path.join(__dirname, '..', '..', 'logs', 'network-capture.log');
+
+function appendNetLog(line) {
+  try {
+    const dir = path.dirname(NET_LOG_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(NET_LOG_PATH, `[${new Date().toISOString()}] ${line}\n`);
+  } catch { /* ignore */ }
+}
 
 const MENU_ACT = {
   s1110: '/trgm_m002_01.act',
@@ -62,6 +72,34 @@ async function ensureBrowser() {
   page = pages.length > 0 ? pages[0] : await context.newPage();
   page.setDefaultTimeout(30000);
 
+  page.on('response', async (response) => {
+    const req = response.request();
+    const url = response.url();
+    const type = req.resourceType();
+    if (type === 'xhr' || type === 'fetch' || (type === 'document' && url.includes('.act'))) {
+      const method = req.method();
+      const postData = req.postData() || '';
+      const status = response.status();
+      const contentType = response.headers()['content-type'] || '';
+      let bodyPreview = '';
+      try {
+        const body = await response.text();
+        bodyPreview = body.substring(0, 500).replace(/\n/g, ' ');
+      } catch { /* ignore */ }
+      const logLine = `${method} ${url} (${status}) ct=${contentType}`;
+      logger.info(`[NET] ${logLine}`);
+      appendNetLog(`[REQ] ${logLine}`);
+      if (postData) {
+        logger.info(`[NET-POST] ${postData.substring(0, 500)}`);
+        appendNetLog(`[POST] ${postData.substring(0, 1000)}`);
+      }
+      if (bodyPreview) {
+        logger.info(`[NET-BODY] ${bodyPreview.substring(0, 300)}`);
+        appendNetLog(`[BODY] ${bodyPreview}`);
+      }
+    }
+  });
+
   // missinstall 리다이렉트를 네트워크 레벨에서 차단
   await page.route('**/wserp_0003_01.act**', (route) => {
     logger.info('[ROUTE] missinstall 리다이렉트 차단');
@@ -110,7 +148,7 @@ async function login() {
   ]);
 
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(1500);
 
   let pageUrl = page.url();
   logger.info(`로그인 페이지 URL: ${pageUrl}`);
@@ -264,8 +302,8 @@ async function login() {
 
   // 로그인 후 페이지 전환 대기
   await Promise.race([
-    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => null),
-    page.waitForTimeout(8000),
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => null),
+    page.waitForTimeout(5000),
   ]);
 
   const afterUrl = page.url();
@@ -307,7 +345,7 @@ async function navigateToMenu(menuId) {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(2000);
   }
 
   let frame = page.frame({ name: 'main_iframe' });
@@ -320,7 +358,7 @@ async function navigateToMenu(menuId) {
   if (frame) {
     const targetUrl = `${BASE_URL}${actFile}`;
     await frame.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(1500);
     logger.info(`iframe URL: ${frame.url()}`);
     return frame;
   }
@@ -330,7 +368,7 @@ async function navigateToMenu(menuId) {
     waitUntil: 'domcontentloaded',
     timeout: 30000,
   });
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(1500);
   return page.mainFrame();
 }
 
@@ -353,7 +391,7 @@ async function scrollToLoadAll(target, label = '') {
 
     if (attempt > 0 && info === prevRowCount) break;
     prevRowCount = info;
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(500);
   }
 }
 
@@ -459,7 +497,39 @@ async function setDateRange(frame, startDate, endDate) {
     return;
   }
 
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(300);
+
+  const forceSetResult = await frame.evaluate(({ sVal, eVal }) => {
+    const startIds = ['txtSrcStartDt', 'txtDtlSrcStartDt'];
+    const endIds = ['txtSrcEndDt', 'txtDtlSrcEndDt'];
+    const log = [];
+    for (const id of startIds) {
+      const el = document.getElementById(id);
+      if (el) {
+        const before = el.value;
+        el.value = sVal;
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        if (setter) { setter.call(el, sVal); }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        log.push(`${id}: "${before}" → "${el.value}"`);
+      }
+    }
+    for (const id of endIds) {
+      const el = document.getElementById(id);
+      if (el) {
+        const before = el.value;
+        el.value = eVal;
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        if (setter) { setter.call(el, eVal); }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        log.push(`${id}: "${before}" → "${el.value}"`);
+      }
+    }
+    return log;
+  }, { sVal: startVal, eVal: endVal });
+  logger.info(`날짜 강제 설정: ${forceSetResult.join(', ')}`);
 
   const verifyBefore = await frame.evaluate(() => {
     const fields = ['txtSrcStartDt', 'txtSrcEndDt', 'txtDtlSrcStartDt', 'txtDtlSrcEndDt'];
@@ -488,7 +558,7 @@ async function setDateRange(frame, startDate, endDate) {
   });
   logger.info(`검색 실행: ${searchResult.join(' | ')}`);
 
-  await page.waitForTimeout(5000);
+  await page.waitForTimeout(2000);
 
   const afterCheck = await frame.evaluate(() => {
     const fields = ['txtSrcStartDt', 'txtSrcEndDt', 'txtDtlSrcStartDt', 'txtDtlSrcEndDt'];
@@ -610,8 +680,8 @@ async function openClientPopupAndExtract(frame, client) {
     throw new Error('팝업이 열리지 않음');
   }
 
-  await popup.waitForLoadState('domcontentloaded');
-  await popup.waitForTimeout(2000);
+  await popup.waitForLoadState('networkidle').catch(() => popup.waitForLoadState('domcontentloaded'));
+  await popup.waitForTimeout(500);
 
   await scrollToLoadAll(popup, `팝업(${client.name})`);
 
@@ -770,7 +840,7 @@ async function openClientPopupAndExtract(frame, client) {
   });
 
   await popup.close().catch(() => null);
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(100);
 
   if (!data.client) data.client = client.name;
   return data;
@@ -794,7 +864,7 @@ async function collectDepositData(options = {}) {
     if (startDate || endDate) {
       await setDateRange(frame, startDate, endDate);
     } else {
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(1000);
     }
 
     const deposits = await frame.evaluate(() => {
