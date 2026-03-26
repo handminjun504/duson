@@ -236,15 +236,13 @@ async function login() {
     : page.locator('input[type="text"], input[type="email"]').first();
 
   await idSelector.click({ force: true }).catch(() => null);
-  await idSelector.fill(userId);
-  await idSelector.dispatchEvent('input');
-  await idSelector.dispatchEvent('change');
+  await idSelector.fill('');
+  await idSelector.type(userId, { delay: 10 });
   logger.info('ID 입력 완료');
 
   await pwField.click({ force: true }).catch(() => null);
-  await pwField.fill(userPw);
-  await pwField.dispatchEvent('input');
-  await pwField.dispatchEvent('change');
+  await pwField.fill('');
+  await pwField.type(userPw, { delay: 10 });
   logger.info('PW 입력 완료');
 
   await page.waitForTimeout(200);
