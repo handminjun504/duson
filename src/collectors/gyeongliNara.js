@@ -39,16 +39,23 @@ function getProgress() {
   return { ...progress };
 }
 
+async function closeBrowser() {
+  try {
+    if (context) await context.close().catch(() => null);
+  } catch { /* ignore */ }
+  browser = null;
+  page = null;
+  context = null;
+  isLoggedIn = false;
+}
+
 async function ensureBrowser() {
   if (browser && page) {
     try {
       await page.evaluate(() => true);
       return;
     } catch {
-      browser = null;
-      page = null;
-      context = null;
-      isLoggedIn = false;
+      await closeBrowser();
     }
   }
 
@@ -304,13 +311,18 @@ async function login() {
     const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '');
     logger.error(`로그인 실패 디버그`, { afterUrl, bodyText, alertText, frames: page.frames().length });
 
-    // 영구 컨텍스트가 꼬인 경우 쿠키/스토리지 초기화 후 재시도
     if (!loginRetried) {
       loginRetried = true;
-      logger.info('쿠키 초기화 후 로그인 재시도...');
-      await page.context().clearCookies();
-      await page.evaluate(() => { try { localStorage.clear(); sessionStorage.clear(); } catch {} });
-      isLoggedIn = false;
+      logger.info('브라우저 재시작 후 로그인 재시도...');
+      await closeBrowser();
+      try {
+        const browserDataDir = USER_DATA_DIR;
+        if (fs.existsSync(browserDataDir)) {
+          fs.rmSync(browserDataDir, { recursive: true, force: true });
+          logger.info('.browser-data 초기화 완료');
+        }
+      } catch (e) { logger.warn(`browser-data 삭제 실패: ${e.message}`); }
+      await ensureBrowser();
       return login();
     }
     loginRetried = false;
