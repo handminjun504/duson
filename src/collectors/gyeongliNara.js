@@ -416,6 +416,105 @@ async function scrollToLoadAll(target, label = '') {
   }
 }
 
+function dedupeLinks(links) {
+  const seen = new Set();
+  return links.filter(l => {
+    const key = `${l.name}|${l.onclick}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function extractClientLinks(frameOrDoc) {
+  return frameOrDoc.evaluate(() => {
+    const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
+    const results = Array.from(links)
+      .map(el => ({ name: el.textContent.trim(), onclick: el.getAttribute('onclick') || '' }))
+      .filter(item => item.name.length > 1 && !/^[\d,.]+$/.test(item.name));
+    if (results.length === 0) {
+      const allLinks = document.querySelectorAll('a[onclick], td[onclick], span[onclick]');
+      for (const el of allLinks) {
+        const oc = el.getAttribute('onclick') || '';
+        const name = el.textContent.trim();
+        if (name.length > 1 && !/^[\d,.]+$/.test(name) && !['조회','검색','닫기','확인','삭제','수정'].includes(name)) {
+          if (/popup|detail|view/i.test(oc)) {
+            results.push({ name, onclick: oc });
+          }
+        }
+      }
+    }
+    return results;
+  });
+}
+
+async function collectAllClientLinks(frame) {
+  let allLinks = await extractClientLinks(frame);
+  logger.info(`초기 거래처 링크: ${allLinks.length}개`);
+
+  const paginationInfo = await frame.evaluate(() => {
+    const pageLinks = document.querySelectorAll('a[onclick*="goPage"], a[onclick*="fn_goPage"], a[onclick*="page"], [class*="paging"] a, .pagination a, .page_nav a');
+    const pageNums = [];
+    for (const a of pageLinks) {
+      const txt = a.textContent.trim();
+      const num = parseInt(txt);
+      if (!isNaN(num) && num > 1) pageNums.push({ num, onclick: a.getAttribute('onclick') || '' });
+    }
+    const nextBtn = document.querySelector('a[onclick*="next"], a[onclick*="Next"], a:has(img[alt*="다음"]), [class*="next"]');
+    return {
+      pageCount: pageNums.length,
+      pages: pageNums.slice(0, 20),
+      hasNext: !!nextBtn,
+      nextOnclick: nextBtn ? (nextBtn.getAttribute('onclick') || '') : '',
+    };
+  });
+
+  if (paginationInfo.pageCount > 0) {
+    logger.info(`페이지네이션 감지: ${paginationInfo.pageCount}개 추가 페이지`);
+
+    for (const pg of paginationInfo.pages) {
+      try {
+        logger.info(`페이지 ${pg.num} 이동...`);
+        await frame.evaluate((onclick) => {
+          try { new Function(onclick)(); } catch {}
+        }, pg.onclick);
+        await page.waitForTimeout(2000);
+        await scrollToLoadAll(frame, `page-${pg.num}`);
+        const pageLinks = await extractClientLinks(frame);
+        logger.info(`  페이지 ${pg.num}: ${pageLinks.length}개 링크`);
+        allLinks.push(...pageLinks);
+      } catch (err) {
+        logger.warn(`페이지 ${pg.num} 이동 실패: ${err.message}`);
+      }
+    }
+  } else if (paginationInfo.hasNext) {
+    logger.info('다음 페이지 버튼 감지, 순회 시작...');
+    for (let pageIdx = 0; pageIdx < 20; pageIdx++) {
+      try {
+        const hasNext = await frame.evaluate(() => {
+          const btn = document.querySelector('a[onclick*="next"], a[onclick*="Next"], a:has(img[alt*="다음"]), [class*="next"]');
+          if (btn) { btn.click(); return true; }
+          return false;
+        });
+        if (!hasNext) break;
+        await page.waitForTimeout(2000);
+        await scrollToLoadAll(frame, `next-${pageIdx}`);
+        const pageLinks = await extractClientLinks(frame);
+        if (pageLinks.length === 0) break;
+        logger.info(`  다음 페이지 ${pageIdx + 2}: ${pageLinks.length}개 링크`);
+        allLinks.push(...pageLinks);
+      } catch (err) {
+        logger.warn(`다음 페이지 이동 실패: ${err.message}`);
+        break;
+      }
+    }
+  }
+
+  allLinks = dedupeLinks(allLinks);
+  logger.info(`총 거래처 링크 (중복 제거 후): ${allLinks.length}개`);
+  return allLinks;
+}
+
 async function setDateRange(frame, startDate, endDate) {
   if (!startDate && !endDate) return;
 
@@ -638,6 +737,9 @@ async function collectSalesData(options = {}) {
 
     await page.waitForTimeout(2000);
 
+    await scrollToLoadAll(frame, '거래명세표');
+    await page.waitForTimeout(500);
+
     const frameDebug = await frame.evaluate(() => ({
       url: window.location.href,
       title: document.title,
@@ -657,36 +759,7 @@ async function collectSalesData(options = {}) {
       logger.info(`onclick 요소 (${frameDebug.allOnclicks.length}개): ${JSON.stringify(frameDebug.allOnclicks.slice(0, 5))}`);
     }
 
-    let clientLinks = await frame.evaluate(() => {
-      const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
-      return Array.from(links)
-        .map(el => ({
-          name: el.textContent.trim(),
-          onclick: el.getAttribute('onclick') || '',
-        }))
-        .filter(item => item.name.length > 1 && !/^[\d,.]+$/.test(item.name));
-    });
-
-    if (clientLinks.length === 0) {
-      logger.warn('PopupCall 링크 없음, 대체 셀렉터 시도...');
-      clientLinks = await frame.evaluate(() => {
-        const results = [];
-        const allLinks = document.querySelectorAll('a[onclick], td[onclick], span[onclick]');
-        for (const el of allLinks) {
-          const oc = el.getAttribute('onclick') || '';
-          const name = el.textContent.trim();
-          if (name.length > 1 && !/^[\d,.]+$/.test(name) && !['조회','검색','닫기','확인','삭제','수정'].includes(name)) {
-            if (oc.includes('Popup') || oc.includes('popup') || oc.includes('detail') || oc.includes('Detail') || oc.includes('view') || oc.includes('View')) {
-              results.push({ name, onclick: oc });
-            }
-          }
-        }
-        return results;
-      });
-      if (clientLinks.length > 0) {
-        logger.info(`대체 셀렉터로 ${clientLinks.length}개 거래처 발견`);
-      }
-    }
+    let clientLinks = await collectAllClientLinks(frame);
 
     logger.info(`${clientLinks.length}개 거래처 발견: ${clientLinks.map(c => c.name).join(', ')}`);
     updateProgress(25, `${clientLinks.length}개 거래처 발견`, { total: clientLinks.length, current: 0 });
