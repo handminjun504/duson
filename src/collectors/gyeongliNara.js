@@ -78,11 +78,14 @@ async function ensureBrowser() {
 
   const headless = process.env.HEADLESS !== 'false';
   context = await chromium.launchPersistentContext(USER_DATA_DIR, {
-    headless,
+    headless: headless ? 'new' : false,
     slowMo: headless ? 50 : 150,
     viewport: { width: 1400, height: 900 },
     locale: 'ko-KR',
     ignoreHTTPSErrors: true,
+    handleSIGINT: false,
+    handleSIGTERM: false,
+    handleSIGHUP: false,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -90,6 +93,9 @@ async function ensureBrowser() {
       '--ignore-certificate-errors',
       '--allow-running-insecure-content',
       '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-default-browser-check',
     ],
   });
   browser = context;
