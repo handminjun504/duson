@@ -53,6 +53,17 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 initGemini();
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   logger.info(`두손푸드웨이 거래처원장 관리 서버 시작: http://${HOST}:${PORT}`);
+});
+server.on('error', (err) => {
+  if (err.code === 'EADDRNOTAVAIL') {
+    logger.warn(`HOST ${HOST} 바인딩 실패 (IP 변경됨?), 0.0.0.0으로 재시도...`);
+    app.listen(PORT, '0.0.0.0', () => {
+      logger.info(`두손푸드웨이 거래처원장 관리 서버 시작 (fallback): http://0.0.0.0:${PORT}`);
+    });
+  } else {
+    logger.error(`서버 시작 실패: ${err.message}`);
+    process.exit(1);
+  }
 });

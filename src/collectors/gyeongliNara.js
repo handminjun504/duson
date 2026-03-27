@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const BASE_URL = 'https://ai.serp.co.kr';
 const USER_DATA_DIR = path.join(__dirname, '..', '..', '.browser-data');
 const NET_LOG_PATH = path.join(__dirname, '..', '..', 'logs', 'network-capture.log');
+const DEBUG_DIR = path.join(__dirname, '..', '..', 'public', 'debug');
 
 function appendNetLog(line) {
   try {
@@ -13,6 +14,22 @@ function appendNetLog(line) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(NET_LOG_PATH, `[${new Date().toISOString()}] ${line}\n`);
   } catch { /* ignore */ }
+}
+
+async function saveDebugScreenshot(target, label) {
+  try {
+    if (!fs.existsSync(DEBUG_DIR)) fs.mkdirSync(DEBUG_DIR, { recursive: true });
+    const ts = Date.now();
+    const filename = `${label}-${ts}.png`;
+    const filepath = path.join(DEBUG_DIR, filename);
+    const screenshotTarget = target.page ? target.page() : target;
+    await screenshotTarget.screenshot({ path: filepath, fullPage: true });
+    logger.info(`디버그 스크린샷 저장: /debug/${filename}`);
+    return `/debug/${filename}`;
+  } catch (err) {
+    logger.warn(`스크린샷 저장 실패: ${err.message}`);
+    return null;
+  }
 }
 
 const MENU_ACT = {
@@ -600,14 +617,41 @@ async function collectSalesData(options = {}) {
     updateProgress(10, '로그인 중...');
     await login();
 
+    updateProgress(12, '로그인 상태 확인...');
+    logger.info(`로그인 후 페이지 URL: ${page.url()}, frames: ${page.frames().length}`);
+    await saveDebugScreenshot(page, 'after-login');
+
     updateProgress(15, '거래명세표 페이지 이동...');
     logger.info(`매출(거래명세표) 페이지 이동... ${startDate ? `(${startDate} ~ ${endDate})` : '(기본 기간)'}`);
     const frame = await navigateToMenu('s1110');
+    logger.info(`거래명세표 프레임 URL: ${frame.url()}`);
+    await saveDebugScreenshot(page, 'after-navigate');
 
     updateProgress(20, '날짜 범위 설정...');
     await setDateRange(frame, startDate, endDate);
 
-    const clientLinks = await frame.evaluate(() => {
+    await page.waitForTimeout(2000);
+
+    const frameDebug = await frame.evaluate(() => ({
+      url: window.location.href,
+      title: document.title,
+      dateFields: (() => {
+        const ids = ['txtSrcStartDt', 'txtSrcEndDt', 'txtDtlSrcStartDt', 'txtDtlSrcEndDt'];
+        return ids.map(id => { const el = document.getElementById(id); return el ? `${id}=${el.value}` : null; }).filter(Boolean);
+      })(),
+      allOnclicks: Array.from(document.querySelectorAll('[onclick]')).slice(0, 20).map(el => ({
+        tag: el.tagName, text: el.textContent.trim().substring(0, 30), onclick: (el.getAttribute('onclick') || '').substring(0, 80),
+      })),
+      tableCount: document.querySelectorAll('table').length,
+      trCount: document.querySelectorAll('tr').length,
+      linkCount: document.querySelectorAll('a').length,
+    }));
+    logger.info(`프레임 상태: url=${frameDebug.url}, tables=${frameDebug.tableCount}, rows=${frameDebug.trCount}, dates=[${frameDebug.dateFields.join(', ')}]`);
+    if (frameDebug.allOnclicks.length > 0) {
+      logger.info(`onclick 요소 (${frameDebug.allOnclicks.length}개): ${JSON.stringify(frameDebug.allOnclicks.slice(0, 5))}`);
+    }
+
+    let clientLinks = await frame.evaluate(() => {
       const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
       return Array.from(links)
         .map(el => ({
@@ -617,13 +661,35 @@ async function collectSalesData(options = {}) {
         .filter(item => item.name.length > 1 && !/^[\d,.]+$/.test(item.name));
     });
 
+    if (clientLinks.length === 0) {
+      logger.warn('PopupCall 링크 없음, 대체 셀렉터 시도...');
+      clientLinks = await frame.evaluate(() => {
+        const results = [];
+        const allLinks = document.querySelectorAll('a[onclick], td[onclick], span[onclick]');
+        for (const el of allLinks) {
+          const oc = el.getAttribute('onclick') || '';
+          const name = el.textContent.trim();
+          if (name.length > 1 && !/^[\d,.]+$/.test(name) && !['조회','검색','닫기','확인','삭제','수정'].includes(name)) {
+            if (oc.includes('Popup') || oc.includes('popup') || oc.includes('detail') || oc.includes('Detail') || oc.includes('view') || oc.includes('View')) {
+              results.push({ name, onclick: oc });
+            }
+          }
+        }
+        return results;
+      });
+      if (clientLinks.length > 0) {
+        logger.info(`대체 셀렉터로 ${clientLinks.length}개 거래처 발견`);
+      }
+    }
+
     logger.info(`${clientLinks.length}개 거래처 발견: ${clientLinks.map(c => c.name).join(', ')}`);
     updateProgress(25, `${clientLinks.length}개 거래처 발견`, { total: clientLinks.length, current: 0 });
 
     if (clientLinks.length === 0) {
       const allText = await frame.evaluate(() => document.body?.innerText || '');
-      logger.warn(`거래처 링크 없음. 페이지 텍스트 (${allText.length}자): ${allText.substring(0, 300)}`);
-      updateProgress(100, '거래처 없음');
+      logger.warn(`거래처 링크 없음. 페이지 텍스트 (${allText.length}자): ${allText.substring(0, 500)}`);
+      await saveDebugScreenshot(page, 'no-clients');
+      updateProgress(100, '거래처 없음 (디버그 스크린샷 저장됨)');
       return [];
     }
 
@@ -946,6 +1012,7 @@ async function collectDepositData(options = {}) {
     logger.info(`입금내역: ${deposits.length}건 수집`);
 
     if (deposits.length === 0) {
+      await saveDebugScreenshot(page, 'no-deposits');
       logger.info('입금내역 수납확인 페이지로 대체 시도...');
       const confirmFrame = await navigateToMenu('s3130');
       if (startDate || endDate) {

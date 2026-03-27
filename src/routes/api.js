@@ -344,4 +344,24 @@ router.post('/report', async (req, res) => {
   }
 });
 
+router.get('/debug/screenshots', (req, res) => {
+  const debugDir = path.join(__dirname, '..', '..', 'public', 'debug');
+  try {
+    if (!fs.existsSync(debugDir)) return res.json({ files: [] });
+    const files = fs.readdirSync(debugDir)
+      .filter(f => f.endsWith('.png'))
+      .sort()
+      .reverse()
+      .slice(0, 20)
+      .map(f => ({
+        name: f,
+        url: `/debug/${f}`,
+        time: fs.statSync(path.join(debugDir, f)).mtime,
+      }));
+    res.json({ files });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
