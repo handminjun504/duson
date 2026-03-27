@@ -165,19 +165,44 @@ function compareSalesData(sheetData, gyeongliData) {
       const sTotal = pn(s.totalAmount);
       const nProduct = normalizeProduct(sProduct);
 
-      // 1단계: 거래처 내에서 품목+공급가액 일치
+      // 1단계: 날짜+품목+공급가액 일치 (가장 정확)
       let match = gItems.find(g =>
-        !g._used && normalizeProduct(g.product) === nProduct && Math.abs(g.supplyAmount - sSupply) <= 1
+        !g._used && normalizeProduct(g.product) === nProduct &&
+        dateMatch(sDate, g.deliveryDate) && Math.abs(g.supplyAmount - sSupply) <= 1
       );
 
-      // 2단계: 품목+단가 일치
+      // 2단계: 날짜+품목+수량 일치
       if (!match) {
         match = gItems.find(g =>
-          !g._used && normalizeProduct(g.product) === nProduct && Math.abs(g.unitPrice - sPrice) <= 1
+          !g._used && normalizeProduct(g.product) === nProduct &&
+          dateMatch(sDate, g.deliveryDate) && Math.abs(g.qty - sQty) <= 0.01
         );
       }
 
-      // 3단계: 품목명만 일치
+      // 3단계: 날짜+품목 일치
+      if (!match) {
+        match = gItems.find(g =>
+          !g._used && normalizeProduct(g.product) === nProduct &&
+          dateMatch(sDate, g.deliveryDate)
+        );
+      }
+
+      // 4단계: 품목+공급가액 일치 (날짜 무관)
+      if (!match) {
+        match = gItems.find(g =>
+          !g._used && normalizeProduct(g.product) === nProduct && Math.abs(g.supplyAmount - sSupply) <= 1
+        );
+      }
+
+      // 5단계: 품목+단가+수량 일치 (날짜 무관)
+      if (!match) {
+        match = gItems.find(g =>
+          !g._used && normalizeProduct(g.product) === nProduct &&
+          Math.abs(g.unitPrice - sPrice) <= 1 && Math.abs(g.qty - sQty) <= 0.01
+        );
+      }
+
+      // 6단계: 품목명만 일치 (최후 수단)
       if (!match) {
         match = gItems.find(g =>
           !g._used && normalizeProduct(g.product) === nProduct
@@ -226,20 +251,23 @@ function compareSalesData(sheetData, gyeongliData) {
         const amountDiffs = diffs.filter(d => !d.startsWith('날짜:') && !d.includes('날짜'));
         const totalsMatch = Math.abs((match.total || 0) - sTotal) <= 10;
         const supplyMatch = Math.abs((match.supplyAmount || 0) - sSupply) <= 10;
+        const supplyVatMatch = Math.abs((match.supplyAmount + match.vat) - (sSupply + sVat)) <= 10;
+        const qtyMatch = Math.abs(match.qty - sQty) <= 0.01;
 
         if (amountDiffs.length === 0) {
           entry._status = 'matched';
           results.matched.push(entry);
-        } else if (totalsMatch && supplyMatch) {
+        } else if (totalsMatch || supplyVatMatch) {
           entry._status = 'matched';
-          entry._note = '합계/공급가 일치 (세부 미미한 차이)';
+          entry._note = diffs.length > 0 ? `미미한 차이: ${diffs.filter(d=>!d.startsWith('날짜')).join(', ') || '날짜만 상이'}` : '';
           results.matched.push(entry);
-        } else if (totalsMatch) {
+        } else if (supplyMatch && qtyMatch) {
           entry._status = 'matched';
-          entry._note = '합계금액 일치 (세부 차이 있음)';
+          entry._note = '공급가/수량 일치 (세액 차이)';
           results.matched.push(entry);
         } else {
           entry._status = 'mismatch';
+          entry._matchLevel = supplyMatch ? '공급가일치-세액차이' : qtyMatch ? '수량일치-금액차이' : '금액불일치';
           results.mismatch.push(entry);
         }
       } else {
