@@ -787,25 +787,40 @@ const PARSE_POPUP_JS = `(function(doc) {
       unitPrice: ['단가','단 가'], supply: ['공급가액','공급가','공 급 가 액'],
       vat: ['세액','세 액','부가세','부가'], note: ['비고','비 고'],
     };
+    var headerCellCount = 0;
     for (var iri = 0; iri < irows.length; iri++) {
       var icells = Array.from(irows[iri].querySelectorAll('td, th'));
       var itexts = icells.map(function(c) { return c.textContent.trim().replace(/\\s+/g,''); });
       if (itexts.some(function(t){return t.includes('품목');}) && itexts.some(function(t){return t.includes('수량');})) {
-        for (var ci = 0; ci < itexts.length; ci++) {
-          var ct = itexts[ci];
+        var visualCol = 0;
+        for (var ci = 0; ci < icells.length; ci++) {
+          var ct = icells[ci].textContent.trim().replace(/\\s+/g,'');
+          var span = parseInt(icells[ci].getAttribute('colspan')) || 1;
           var keys = Object.keys(colPatterns);
           for (var ki = 0; ki < keys.length; ki++) {
             var ps = colPatterns[keys[ki]];
-            if (ps.some(function(p){return ct.replace(/\\s/g,'').includes(p.replace(/\\s/g,''));})) colMap[keys[ki]] = ci;
+            if (ps.some(function(p){return ct.replace(/\\s/g,'').includes(p.replace(/\\s/g,''));})) colMap[keys[ki]] = visualCol;
           }
+          visualCol += span;
         }
+        headerCellCount = visualCol;
         headerFound = true; continue;
       }
       if (!headerFound) continue;
       if (itexts.length < 4) continue;
       if (itexts.every(function(t){return !t || t==='';})) continue;
       if (itexts.some(function(t){return t.includes('합계') || t.includes('소계');})) continue;
-      var get = function(key) { return (colMap[key] !== undefined ? itexts[colMap[key]] : '') || ''; };
+
+      var dataVisualCols = [];
+      var dvi = 0;
+      for (var dci = 0; dci < icells.length; dci++) {
+        var dspan = parseInt(icells[dci].getAttribute('colspan')) || 1;
+        dataVisualCols[dvi] = itexts[dci] || '';
+        for (var si = 1; si < dspan; si++) { dataVisualCols[dvi + si] = ''; }
+        dvi += dspan;
+      }
+
+      var get = function(key) { return (colMap[key] !== undefined ? (dataVisualCols[colMap[key]] || '') : '') || ''; };
       var pn = function(s) { return parseFloat((s||'').replace(/[,\\s]/g,'')) || 0; };
       var product = get('product');
       var dateCell = get('date');
@@ -817,6 +832,57 @@ const PARSE_POPUP_JS = `(function(doc) {
           vat: pn(get('vat')), total: pn(get('supply')) + pn(get('vat')),
           note: get('note'),
         });
+      }
+    }
+
+    if (result.items.length > 0) {
+      var allZero = result.items.every(function(i){ return i.supplyAmount === 0 && i.unitPrice === 0; });
+      if (allZero) {
+        var shifted = [];
+        var hasUnit = colMap.unit !== undefined;
+        var offset = hasUnit ? -1 : 1;
+        var tryMaps = [offset, -offset];
+        for (var ti4 = 0; ti4 < tryMaps.length && shifted.length === 0; ti4++) {
+          var adj = tryMaps[ti4];
+          var adjMap = {};
+          var numKeys = ['qty','unitPrice','supply','vat','note'];
+          for (var nk = 0; nk < numKeys.length; nk++) {
+            if (colMap[numKeys[nk]] !== undefined) adjMap[numKeys[nk]] = colMap[numKeys[nk]] + adj;
+          }
+          adjMap.date = colMap.date; adjMap.product = colMap.product; adjMap.spec = colMap.spec;
+
+          headerFound = false;
+          for (var iri2 = 0; iri2 < irows.length; iri2++) {
+            var ic2 = Array.from(irows[iri2].querySelectorAll('td, th'));
+            var it2 = ic2.map(function(c){ return c.textContent.trim().replace(/\\s+/g,''); });
+            if (!headerFound) {
+              if (it2.some(function(t){return t.includes('품목');})) { headerFound = true; }
+              continue;
+            }
+            if (it2.length < 4 || it2.every(function(t){return !t;})) continue;
+            if (it2.some(function(t){return t.includes('합계');})) continue;
+            var get2 = function(key) { return (adjMap[key] !== undefined && adjMap[key] >= 0 && adjMap[key] < it2.length ? it2[adjMap[key]] : '') || ''; };
+            var supply2 = parseFloat((get2('supply')||'').replace(/[,\\s]/g,'')) || 0;
+            if (supply2 > 0) {
+              var prod2 = get2('product');
+              if (prod2 && prod2.length > 0) {
+                shifted.push({
+                  deliveryDate: get2('date'), product: prod2, spec: get2('spec'),
+                  qty: parseFloat((get2('qty')||'').replace(/[,\\s]/g,'')) || 0,
+                  unitPrice: parseFloat((get2('unitPrice')||'').replace(/[,\\s]/g,'')) || 0,
+                  supplyAmount: supply2,
+                  vat: parseFloat((get2('vat')||'').replace(/[,\\s]/g,'')) || 0,
+                  total: supply2 + (parseFloat((get2('vat')||'').replace(/[,\\s]/g,'')) || 0),
+                  note: get2('note'),
+                });
+              }
+            }
+          }
+        }
+        if (shifted.length > 0) {
+          result.items = shifted;
+          result._colFixed = true;
+        }
       }
     }
     result._colMap = colMap;

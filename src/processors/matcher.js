@@ -212,6 +212,19 @@ function compareSalesData(sheetData, gyeongliData) {
       if (match) {
         match._used = true;
 
+        if (match.supplyAmount === 0 && match.total === 0 && match.unitPrice === 0) {
+          const entry = {
+            client: clientName, product: sProduct, spec: s.spec || match.spec || '',
+            qty: sQty, sheetDate: sDate, gyeongliDate: match.deliveryDate,
+            sheetSupply: sSupply, sheetVat: sVat, sheetTotal: sTotal,
+            gyeongliSupply: 0, gyeongliVat: 0, gyeongliTotal: 0,
+            diffs: ['경리나라 데이터 파싱 오류 (금액 0)'],
+            _status: 'matched', _note: '경리나라 파싱오류 - 시트 데이터 기준',
+          };
+          results.matched.push(entry);
+          continue;
+        }
+
         const diffs = [];
         if (!dateMatch(sDate, match.deliveryDate)) {
           diffs.push(`날짜: 시트=${sDate || '없음'} / 경리=${match.deliveryDate || '없음'}`);
