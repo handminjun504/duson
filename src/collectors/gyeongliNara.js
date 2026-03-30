@@ -44,7 +44,12 @@ let context = null;
 let isLoggedIn = false;
 let isBusy = false;
 let loginRetried = false;
+/** closeBrowser 시 false로 리셋 — 새 page에 dialog 리스너 1회만 부착 */
+let dialogListenerAttached = false;
 const progress = { percent: 0, message: '', step: '', total: 0, current: 0 };
+
+const LOGIN_SUCCESS_SELECTORS =
+  '.toolbar2, .co_name, .gnb, .lnb, #main_iframe, iframe[name="main_iframe"]';
 
 function updateProgress(percent, message, extra = {}) {
   progress.percent = Math.min(100, Math.round(percent));
@@ -64,6 +69,7 @@ async function closeBrowser() {
   page = null;
   context = null;
   isLoggedIn = false;
+  dialogListenerAttached = false;
 }
 
 async function ensureBrowser() {
@@ -86,6 +92,8 @@ async function ensureBrowser() {
     handleSIGINT: false,
     handleSIGTERM: false,
     handleSIGHUP: false,
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -102,6 +110,21 @@ async function ensureBrowser() {
   const pages = context.pages();
   page = pages.length > 0 ? pages[0] : await context.newPage();
   page.setDefaultTimeout(30000);
+
+  await context.addInitScript(() => {
+    try {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    } catch { /* ignore */ }
+  });
+
+  if (!dialogListenerAttached) {
+    dialogListenerAttached = true;
+    page.on('dialog', async (dialog) => {
+      logger.info(`[DIALOG] ${dialog.type()}: ${dialog.message()}`);
+      await page.evaluate((msg) => { window.__lastAlert = msg; }, dialog.message());
+      await dialog.dismiss().catch(() => null);
+    });
+  }
 
   page.on('response', async (response) => {
     const url = response.url();
@@ -138,24 +161,19 @@ async function login() {
 
   logger.info(`경리나라 로그인 시도 중... (ID: ${userId.substring(0, 4)}***)`);
 
+  await page.evaluate(() => { window.__lastAlert = null; }).catch(() => null);
+
   const currentUrl = page.url();
   logger.info(`현재 페이지 URL: ${currentUrl}`);
 
   if (currentUrl.includes('serp.co.kr') && !currentUrl.includes('0002_01') && !currentUrl.includes('about:blank')) {
-    const hasContent = await page.locator('.toolbar2, .co_name, .gnb, .lnb, #main_iframe').count();
+    const hasContent = await page.locator(LOGIN_SUCCESS_SELECTORS).count();
     if (hasContent > 0) {
       isLoggedIn = true;
       logger.info('경리나라 이미 로그인되어 있음 (영구 세션)');
       return;
     }
   }
-
-  // alert 팝업 캡처 (로그인 실패 메시지 등)
-  page.on('dialog', async (dialog) => {
-    logger.info(`[DIALOG] ${dialog.type()}: ${dialog.message()}`);
-    await page.evaluate((msg) => { window.__lastAlert = msg; }, dialog.message());
-    await dialog.dismiss().catch(() => null);
-  });
 
   // missinstall 쿠키를 미리 설정하여 리다이렉트 방지
   await page.context().addCookies([
@@ -216,7 +234,7 @@ async function login() {
   }
 
   if (!pageUrl.includes('0002_01') && !pageUrl.includes('missinstall') && !pageUrl.includes('0003_01')) {
-    const hasContent = await page.locator('.toolbar2, .co_name, .gnb, .lnb, #main_iframe').count();
+    const hasContent = await page.locator(LOGIN_SUCCESS_SELECTORS).count();
     if (hasContent > 0) {
       isLoggedIn = true;
       logger.info('경리나라 이미 로그인되어 있음 (리다이렉트)');
@@ -224,26 +242,36 @@ async function login() {
     }
   }
 
-  // 보안 플러그인 오버레이/팝업 강제 제거
-  await page.evaluate(() => {
-    document.querySelectorAll('[role="dialog"], .modal, .popup, .layer_pop, .dim, .dimmed').forEach(d => {
-      const btn = d.querySelector('button, .close, .btn_close, [class*="close"]');
-      if (btn) btn.click();
-      else d.remove();
-    });
-    // pointer-events를 가로채는 전체화면 오버레이 제거
-    document.querySelectorAll('div').forEach(el => {
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      if (rect.width > window.innerWidth * 0.5 && rect.height > window.innerHeight * 0.5
-          && style.position === 'fixed' && parseInt(style.zIndex || '0') > 100) {
-        el.remove();
-      }
-    });
-  }).catch(() => null);
-  await page.waitForTimeout(500);
+  // 로그인 URL에서는 보안/키보드 오버레이만 건드리지 않고 닫기 버튼만 시도 (오버레이 제거가 로그인 실패 유발 가능)
+  const onLoginAct = pageUrl.includes('0002_01');
+  if (onLoginAct) {
+    await page.evaluate(() => {
+      document.querySelectorAll('.pop_wrap .btn_close, .pop_header .btn_close, .pop_wrap .pop_btn.btnA').forEach((el) => {
+        const t = (el.textContent || '').trim();
+        if (/닫기|확인/.test(t) || el.classList.contains('btn_close')) el.click();
+      });
+    }).catch(() => null);
+    await page.waitForTimeout(400);
+  } else {
+    await page.evaluate(() => {
+      document.querySelectorAll('[role="dialog"], .modal, .popup, .layer_pop, .dim, .dimmed').forEach(d => {
+        const btn = d.querySelector('button, .close, .btn_close, [class*="close"]');
+        if (btn) btn.click();
+        else d.remove();
+      });
+      document.querySelectorAll('div').forEach(el => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        if (rect.width > window.innerWidth * 0.5 && rect.height > window.innerHeight * 0.5
+            && style.position === 'fixed' && parseInt(style.zIndex || '0', 10) > 100) {
+          el.remove();
+        }
+      });
+    }).catch(() => null);
+    await page.waitForTimeout(500);
+  }
 
-  const pwField = page.locator('input[type="password"]').first();
+  const pwField = page.locator('#pwd, input[name="PWD"], input[type="password"]').first();
   const hasPwField = await pwField.count();
   logger.info(`비밀번호 필드 존재: ${hasPwField > 0}`);
 
@@ -259,54 +287,92 @@ async function login() {
     throw new Error(`로그인 폼을 찾을 수 없습니다. URL: ${debugInfo.url}`);
   }
 
-  // ID 필드 찾기: name/id 속성 우선, 그 다음 type="text"
-  const idField = page.locator('input[name="userId"], input[name="user_id"], input[name="loginId"], input[id="userId"], input[id="user_id"], input[id="loginId"]').first();
+  // AI경리나라 로그인 폼: #userId(name=USER_ID), #pwd, #btnLogin(앵커)
+  const idField = page
+    .locator('#userId, input[name="USER_ID"], input[name="userId"], input[name="user_id"], input[name="loginId"]')
+    .first();
   const idFieldCount = await idField.count();
   const idSelector = idFieldCount > 0
     ? idField
     : page.locator('input[type="text"], input[type="email"]').first();
 
+  await idSelector.waitFor({ state: 'visible', timeout: 15000 }).catch(() => null);
   await idSelector.click({ force: true }).catch(() => null);
   await idSelector.fill('');
-  await idSelector.type(userId, { delay: 10 });
+  await idSelector.fill(userId);
   logger.info('ID 입력 완료');
 
   await pwField.click({ force: true }).catch(() => null);
   await pwField.fill('');
-  await pwField.type(userPw, { delay: 10 });
+  await pwField.fill(userPw);
   logger.info('PW 입력 완료');
 
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(250);
 
   logger.info('로그인 버튼 클릭 시도...');
-  // 1차: Playwright locator로 로그인 버튼 클릭
-  const loginBtn = page.locator('button:has-text("로그인"), a:has-text("로그인"), input[value*="로그인"], button:has-text("LOGIN"), a:has-text("LOGIN")').first();
-  const loginBtnCount = await loginBtn.count();
+  await page.locator('#btnLogin').waitFor({ state: 'visible', timeout: 15000 }).catch(() => null);
+  await page
+    .waitForFunction(
+      () => {
+        const el = document.querySelector('#btnLogin');
+        return el && !el.classList.contains('disabled');
+      },
+      { timeout: 20000 },
+    )
+    .catch(() => logger.warn('#btnLogin 활성화 대기 타임아웃 — 클릭 시도 계속'));
+
+  const primaryLogin = page.locator('#btnLogin:not(.disabled)');
+  const loginBtnCount = await primaryLogin.count();
   if (loginBtnCount > 0) {
-    await loginBtn.click({ force: true });
-    logger.info('로그인 버튼 클릭 (Playwright locator)');
+    await primaryLogin.click();
+    logger.info('로그인 클릭 (#btnLogin)');
   } else {
-    // 2차: evaluate 폴백
-    const loginClicked = await page.evaluate(() => {
-      const btns = document.querySelectorAll('button, a, input[type="submit"], input[type="button"]');
-      for (const btn of btns) {
-        const txt = (btn.textContent || btn.value || '').trim();
-        if (txt.includes('로그인') || txt.includes('LOGIN') || txt.includes('Log in')) {
-          btn.click();
-          return txt;
+    const loginBtn = page.locator(
+      'button:has-text("로그인"), a:has-text("로그인"), input[value*="로그인"], button:has-text("LOGIN"), a:has-text("LOGIN")',
+    ).first();
+    const cnt = await loginBtn.count();
+    if (cnt > 0) {
+      await loginBtn.click({ force: true });
+      logger.info('로그인 버튼 클릭 (텍스트 매칭)');
+    } else {
+      const loginClicked = await page.evaluate(() => {
+        const el = document.querySelector('#btnLogin');
+        if (el && !el.classList.contains('disabled')) {
+          el.click();
+          return '#btnLogin';
         }
-      }
-      const form = document.querySelector('form');
-      if (form) { form.submit(); return 'form.submit'; }
-      return null;
-    });
-    logger.info(`로그인 클릭 (evaluate): ${loginClicked}`);
+        const btns = document.querySelectorAll('button, a, input[type="submit"], input[type="button"]');
+        for (const btn of btns) {
+          const txt = (btn.textContent || btn.value || '').trim();
+          if (txt === '로그인' || txt.includes('LOGIN')) {
+            btn.click();
+            return txt;
+          }
+        }
+        const form = document.querySelector('#loginFrm, form');
+        if (form) {
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          return 'form.dispatch';
+        }
+        return null;
+      });
+      logger.info(`로그인 클릭 (evaluate): ${loginClicked}`);
+    }
   }
 
-  // 로그인 후 페이지 전환 대기
+  // AJAX 로그인 대비: URL 변경 또는 메인 UI 노출까지 대기
   await Promise.race([
-    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => null),
-    page.waitForTimeout(5000),
+    page.waitForURL((u) => u.href.includes('serp.co.kr') && !u.href.includes('0002_01'), { timeout: 45000 }),
+    page.locator(LOGIN_SUCCESS_SELECTORS).first().waitFor({ state: 'visible', timeout: 45000 }),
+    page.waitForFunction(
+      () => window.location.href.includes('serp.co.kr') && !window.location.href.includes('0002_01'),
+      { timeout: 45000 },
+    ),
+  ]).catch(() => logger.warn('로그인 후 전환 대기 타임아웃 — 현재 DOM으로 성공 여부 재판정'));
+
+  await Promise.race([
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 }).catch(() => null),
+    page.waitForTimeout(2000),
   ]);
 
   const afterUrl = page.url();
@@ -315,21 +381,22 @@ async function login() {
   const alertText = await page.evaluate(() => window.__lastAlert || null).catch(() => null);
   if (alertText) logger.warn(`alert 메시지: ${alertText}`);
 
-  const hasToolbar = await page.locator('.toolbar2, .co_name, .gnb, .lnb, #main_iframe').count();
-  const hasFrame = page.frames().length > 1;
-  const hasPwStill = await page.locator('input[type="password"]').count();
+  const onLoginUrl = afterUrl.includes('0002_01');
+  const hasToolbar = await page.locator(LOGIN_SUCCESS_SELECTORS).count();
+  const frameCount = page.frames().length;
+  const hasPwStill = await page.locator('#pwd, input[type="password"]').count();
 
-  logger.info(`로그인 판별: toolbar=${hasToolbar} frames=${page.frames().length} pwField=${hasPwStill} url=${afterUrl}`);
+  logger.info(`로그인 판별: toolbar=${hasToolbar} frames=${frameCount} pwField=${hasPwStill} url=${afterUrl}`);
 
-  if (hasToolbar > 0 || hasFrame) {
+  const looksLoggedIn =
+    hasToolbar > 0
+    || (!onLoginUrl && afterUrl.includes('serp.co.kr'))
+    || (!onLoginUrl && hasPwStill === 0 && afterUrl.includes('serp.co.kr'))
+    || (!onLoginUrl && frameCount > 1 && afterUrl.includes('serp.co.kr'));
+
+  if (looksLoggedIn) {
     isLoggedIn = true;
     logger.info('경리나라 로그인 성공');
-  } else if (!afterUrl.includes('0002_01') && afterUrl.includes('serp.co.kr')) {
-    isLoggedIn = true;
-    logger.info('경리나라 로그인 성공 (URL 기반 확인)');
-  } else if (hasPwStill === 0 && afterUrl.includes('serp.co.kr')) {
-    isLoggedIn = true;
-    logger.info('경리나라 로그인 성공 (비밀번호 필드 사라짐)');
   } else {
     const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '');
     logger.error(`로그인 실패 디버그`, { afterUrl, bodyText, alertText, frames: page.frames().length });
@@ -349,7 +416,10 @@ async function login() {
       return login();
     }
     loginRetried = false;
-    throw new Error('경리나라 로그인 실패. 아이디/비밀번호를 확인하세요.');
+    const hint =
+      '아이디/비밀번호 또는 캡차/보안인증/사이트 변경 여부를 확인하세요.';
+    const detail = alertText ? ` (사이트 메시지: ${alertText})` : '';
+    throw new Error(`경리나라 로그인 실패. ${hint}${detail}`);
   }
   loginRetried = false;
 }
