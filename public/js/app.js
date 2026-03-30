@@ -89,6 +89,8 @@ async function apiCall(method, endpoint, body = null) {
 async function loadStatus() {
   try {
     const st = await apiCall('GET', '/status');
+    const verEl = document.getElementById('app-version-badge');
+    if (verEl && st.version) verEl.textContent = `v${st.version}`;
     document.getElementById('statSheetCount').textContent = st.sheetCount || '-';
     document.getElementById('statGyeongliCount').textContent = st.gyeongliItemCount || '-';
     document.getElementById('statMismatch').textContent = st.compared ? st.mismatchCount : '-';
@@ -96,6 +98,8 @@ async function loadStatus() {
     document.getElementById('statusText').textContent = st.geminiAvailable ? 'Gemini 연결됨' : 'Gemini 미설정';
   } catch {
     document.getElementById('statusText').textContent = '서버 연결 실패';
+    const verEl = document.getElementById('app-version-badge');
+    if (verEl) verEl.textContent = '—';
   }
 }
 

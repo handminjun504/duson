@@ -10,6 +10,8 @@ const gemini = require('../processors/geminiAnalyzer');
 const excelWriter = require('../writers/excelWriter');
 const logger = require('../utils/logger');
 
+const pkg = require('../../package.json');
+
 const STATE_FILE = path.join(__dirname, '..', '..', '.appstate.json');
 
 function loadState() {
@@ -44,6 +46,7 @@ let appState = loadState();
 
 router.get('/status', (req, res) => {
   res.json({
+    version: pkg.version,
     sheetCollected: !!appState.sheetData,
     sheetCount: appState.sheetData?.length || 0,
     gyeongliCollected: !!appState.gyeongliSales,
