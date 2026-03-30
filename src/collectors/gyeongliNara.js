@@ -38,6 +38,82 @@ const MENU_ACT = {
   s3130: '/rcpt_0003_01.act',
 };
 
+function isYmdCompact(s) {
+  if (typeof s !== 'string' || !/^\d{8}$/.test(s)) return false;
+  const y = parseInt(s.slice(0, 4), 10);
+  const m = parseInt(s.slice(4, 6), 10);
+  const d = parseInt(s.slice(6, 8), 10);
+  if (y < 1990 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return false;
+  return true;
+}
+
+/** 거래처 onclick 문자열에 박힌 조회기간(YYYY-MM-DD, YYYYMMDD)을 UI에서 선택한 기간으로 치환 */
+function injectDatesIntoOnclick(onclick, startDash, endDash) {
+  if (!onclick || (!startDash && !endDash)) return onclick;
+  if (startDash && endDash) {
+    const quotedMatches = onclick.match(/['"]\d{4}-\d{2}-\d{2}['"]/g);
+    if (quotedMatches && quotedMatches.length >= 2) {
+      let i = 0;
+      return onclick.replace(/['"](\d{4}-\d{2}-\d{2})['"]/g, () => (i++ === 0 ? `'${startDash}'` : `'${endDash}'`));
+    }
+  }
+  const isoBare = /\b(\d{4}-\d{2}-\d{2})\b/g;
+  const isoAll = [...onclick.matchAll(isoBare)];
+  if (isoAll.length >= 2 && startDash && endDash) {
+    let i = 0;
+    return onclick.replace(isoBare, () => (i++ === 0 ? startDash : endDash));
+  }
+  const compRe = /\b(20\d{6})\b/g;
+  const compMatches = [...onclick.matchAll(compRe)].map((m) => m[1]).filter(isYmdCompact);
+  if (compMatches.length >= 2 && startDash && endDash) {
+    const sC = startDash.replace(/-/g, '');
+    const eC = endDash.replace(/-/g, '');
+    let n = 0;
+    return onclick.replace(compRe, (full, g1) => {
+      if (!isYmdCompact(g1)) return full;
+      if (n === 0) { n++; return sC; }
+      if (n === 1) { n++; return eC; }
+      return full;
+    });
+  }
+  return onclick;
+}
+
+/** 상세 fetch URL 쿼리의 날짜 파라미터를 선택 기간에 맞게 교체 */
+function injectDatesIntoUrl(href, startDash, endDash) {
+  if (!href || (!startDash && !endDash)) return href;
+  try {
+    const u = new URL(href, BASE_URL);
+    const dateLikeVal = (v) => {
+      if (!v) return false;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
+      if (/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(v)) return true;
+      return isYmdCompact(v);
+    };
+    const dateKey = (k) => /(DT|DATE)/i.test(k) && !/TIME/i.test(k);
+    let i = 0;
+    for (const [key, val] of u.searchParams.entries()) {
+      if (!dateLikeVal(val) || !dateKey(key)) continue;
+      if (i === 0 && startDash) {
+        const nv = isYmdCompact(val)
+          ? startDash.replace(/-/g, '')
+          : (val.includes('/') ? startDash.replace(/-/g, '/') : startDash);
+        u.searchParams.set(key, nv);
+        i++;
+      } else if (i === 1 && endDash) {
+        const nv = isYmdCompact(val)
+          ? endDash.replace(/-/g, '')
+          : (val.includes('/') ? endDash.replace(/-/g, '/') : endDash);
+        u.searchParams.set(key, nv);
+        i++;
+      }
+    }
+    return u.toString();
+  } catch {
+    return href;
+  }
+}
+
 let browser = null;
 let page = null;
 let context = null;
@@ -463,11 +539,50 @@ async function navigateToMenu(menuId) {
   return page.mainFrame();
 }
 
+/** 스크롤 후 뜨는 로딩/스피너·ajax가 끝날 때까지 대기 (무한스크롤·지연 행 렌더) */
+async function waitForNoBusyOverlay(target, timeoutMs = 12000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const busy = await target.evaluate(() => {
+      const hints = [
+        '[class*="loading"]', '[class*="Loading"]', '[class*="spinner"]', '[class*="Spinner"]',
+        '[id*="loading"]', '[id*="LOADING"]', '.wrap_loading', '.loading_wrap', '.ly_loading',
+        '[class*="progress"][class*="ing"]', '.ajaxBusy', '#ajaxBusy',
+      ];
+      for (const sel of hints) {
+        try {
+          for (const el of document.querySelectorAll(sel)) {
+            const st = getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity || '1') < 0.05) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width < 3 && r.height < 3) continue;
+            return true;
+          }
+        } catch { /* ignore */ }
+      }
+      try {
+        if (typeof jQuery !== 'undefined' && typeof jQuery.active === 'number' && jQuery.active > 0) return true;
+      } catch { /* ignore */ }
+      return false;
+    }).catch(() => false);
+    if (!busy) return;
+    await page.waitForTimeout(220);
+  }
+}
+
+/**
+ * 하단까지 스크롤하며 지연 로딩된 행을 모두 불러올 때까지 반복.
+ * 짧은 500ms만 쓰면 로딩 중에 행 수가 멈춘 것으로 오인할 수 있음.
+ */
 async function scrollToLoadAll(target, label = '') {
-  let prevRowCount = 0;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const info = await target.evaluate(() => {
-      const allEls = document.querySelectorAll('div, section');
+  const maxRounds = 18;
+  const stableNeeded = 3;
+  let prevTr = -1;
+  let stablePasses = 0;
+
+  for (let round = 0; round < maxRounds; round++) {
+    const trCount = await target.evaluate(() => {
+      const allEls = document.querySelectorAll('div, section, main, article');
       for (const el of allEls) {
         const style = getComputedStyle(el);
         if ((style.overflowY === 'scroll' || style.overflowY === 'auto') && el.scrollHeight > el.clientHeight + 10) {
@@ -480,10 +595,18 @@ async function scrollToLoadAll(target, label = '') {
       return document.querySelectorAll('tr').length;
     }).catch(() => 0);
 
-    if (attempt > 0 && info === prevRowCount) break;
-    prevRowCount = info;
-    await page.waitForTimeout(500);
+    await waitForNoBusyOverlay(target, 12000);
+    await page.waitForTimeout(650);
+
+    if (round > 0 && trCount === prevTr) {
+      stablePasses += 1;
+      if (stablePasses >= stableNeeded) break;
+    } else {
+      stablePasses = 0;
+    }
+    prevTr = trCount;
   }
+  if (label) logger.info(`스크롤·지연로딩 안정화 완료 (${label})`);
 }
 
 function dedupeLinks(links) {
@@ -644,7 +767,6 @@ async function setDateRange(frame, startDate, endDate) {
         const r = setDateField(el, sDash, sSlash);
         log.push(`start ${id}: ${r}`);
         startSet = true;
-        break;
       }
     }
     for (const id of endIds) {
@@ -653,7 +775,6 @@ async function setDateRange(frame, startDate, endDate) {
         const r = setDateField(el, eDash, eSlash);
         log.push(`end ${id}: ${r}`);
         endSet = true;
-        break;
       }
     }
 
@@ -729,10 +850,10 @@ async function setDateRange(frame, startDate, endDate) {
     const vals = fields.map(id => { const el = document.getElementById(id); return el ? { id, value: el.value } : null; }).filter(Boolean);
     const links = document.querySelectorAll('[onclick*="PopupCall"], [onclick*="fn_PopupCall"]');
 
-    const startField = vals.find(v => /start|str/i.test(v.id));
-    const endField = vals.find(v => /end/i.test(v.id));
-    const startOk = startField && (startField.value === sDash || startField.value === sSlash);
-    const endOk = endField && (endField.value === eDash || endField.value === eSlash);
+    const startFields = vals.filter(v => /startdt$/i.test(v.id));
+    const endFields = vals.filter(v => /enddt$/i.test(v.id));
+    const startOk = startFields.length === 0 || startFields.every(f => f.value === sDash || f.value === sSlash);
+    const endOk = endFields.length === 0 || endFields.every(f => f.value === eDash || f.value === eSlash);
 
     return {
       fields: vals.map(v => `${v.id}=${v.value}`).join(', '),
@@ -760,7 +881,6 @@ async function setDateRange(frame, startDate, endDate) {
         await el.type(usesSlash ? startSlash : startDash, { delay: 30 });
         await el.dispatchEvent('change');
         logger.info(`시작일 재설정(${sel}): ${usesSlash ? startSlash : startDash}`);
-        break;
       }
     }
     for (const sel of endSelectors) {
@@ -773,7 +893,6 @@ async function setDateRange(frame, startDate, endDate) {
         await el.type(usesSlash ? endSlash : endDash, { delay: 30 });
         await el.dispatchEvent('change');
         logger.info(`종료일 재설정(${sel}): ${usesSlash ? endSlash : endDash}`);
-        break;
       }
     }
 
@@ -881,7 +1000,7 @@ async function collectSalesData(options = {}) {
 
       try {
         logger.info(`거래처 수집: ${client.name}`);
-        const clientDetail = await fetchClientData(frame, client);
+        const clientDetail = await fetchClientData(frame, client, { startDate, endDate });
         if (clientDetail) {
           salesData.push(clientDetail);
           logger.info(`  → ${client.name}: ${clientDetail.items.length}개 품목, 합계 ${clientDetail.totalAmount}`);
@@ -1084,7 +1203,11 @@ const PARSE_POPUP_JS = `(function(doc) {
   return result;
 })`;
 
-async function fetchClientData(frame, client) {
+async function fetchClientData(frame, client, dateOpt = {}) {
+  const startDash = (dateOpt.startDate || '').replace(/\//g, '-');
+  const endDash = (dateOpt.endDate || '').replace(/\//g, '-');
+  const onclickPatched = injectDatesIntoOnclick(client.onclick, startDash, endDash);
+
   const capturedUrl = await frame.evaluate((onclick) => {
     return new Promise((resolve) => {
       const origOpen = window.open;
@@ -1102,16 +1225,17 @@ async function fetchClientData(frame, client) {
       }
       setTimeout(() => { window.open = origOpen; resolve(null); }, 500);
     });
-  }, client.onclick);
+  }, onclickPatched);
 
   if (!capturedUrl) {
     logger.warn(`${client.name}: URL 캡처 실패, 팝업 fallback`);
-    return openClientPopupFallback(frame, client);
+    return openClientPopupFallback(frame, client, dateOpt);
   }
 
-  const fullUrl = capturedUrl.startsWith('http')
+  let fullUrl = capturedUrl.startsWith('http')
     ? capturedUrl
     : `${BASE_URL}${capturedUrl.startsWith('/') ? '' : '/'}${capturedUrl}`;
+  fullUrl = injectDatesIntoUrl(fullUrl, startDash, endDash);
   logger.info(`${client.name}: fetch URL = ${fullUrl}`);
   appendNetLog(`[FETCH] ${client.name}: ${fullUrl}`);
 
@@ -1132,12 +1256,12 @@ async function fetchClientData(frame, client) {
 
   if (data && data._fetchError) {
     logger.warn(`${client.name}: fetch 실패 (${data._fetchError}), 팝업 fallback`);
-    return openClientPopupFallback(frame, client);
+    return openClientPopupFallback(frame, client, dateOpt);
   }
 
   if (!data || (!data.items?.length && !data.totalAmount)) {
     logger.warn(`${client.name}: fetch 데이터 부족, 팝업 fallback`);
-    return openClientPopupFallback(frame, client);
+    return openClientPopupFallback(frame, client, dateOpt);
   }
 
   if (!data.client) data.client = client.name;
@@ -1145,13 +1269,17 @@ async function fetchClientData(frame, client) {
   return data;
 }
 
-async function openClientPopupFallback(frame, client) {
+async function openClientPopupFallback(frame, client, dateOpt = {}) {
+  const startDash = (dateOpt.startDate || '').replace(/\//g, '-');
+  const endDash = (dateOpt.endDate || '').replace(/\//g, '-');
+  const onclickPatched = injectDatesIntoOnclick(client.onclick, startDash, endDash);
+
   const popupPromise = context.waitForEvent('page', { timeout: 8000 });
 
   await frame.evaluate((onclick) => {
     const fn = new Function(onclick);
     fn();
-  }, client.onclick);
+  }, onclickPatched);
 
   let popup;
   try {
@@ -1162,6 +1290,20 @@ async function openClientPopupFallback(frame, client) {
 
   await popup.waitForLoadState('networkidle').catch(() => popup.waitForLoadState('domcontentloaded'));
   await popup.waitForTimeout(500);
+
+  if (dateOpt.startDate || dateOpt.endDate) {
+    const hasRangeInputs = await popup.locator(
+      '#txtSrcStartDt, #txtDtlSrcStartDt, #txtSrcEndDt, #txtDtlSrcEndDt, input.hasDatepicker',
+    ).count();
+    if (hasRangeInputs > 0) {
+      try {
+        await setDateRange(popup, dateOpt.startDate, dateOpt.endDate);
+        await popup.waitForTimeout(600);
+      } catch (e) {
+        logger.warn(`${client.name}: 팝업 내 기간 재설정 실패(무시): ${e.message}`);
+      }
+    }
+  }
 
   await scrollToLoadAll(popup, `팝업(${client.name})`);
 
