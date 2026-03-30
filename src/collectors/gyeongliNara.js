@@ -607,13 +607,18 @@ async function setDateRange(frame, startDate, endDate) {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
       if (setter) setter.call(el, val);
 
-      // jQuery datepicker 내부 상태 동기화
+      // jQuery datepicker 내부 상태 동기화 (정오 로컬 시각 — UTC 일자 밀림 방지)
       try {
         if (typeof $ !== 'undefined' && $(el).hasClass('hasDatepicker')) {
           const parts = dashVal.split('-');
-          const dateObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-          $(el).datepicker('setDate', dateObj);
-          log.push(`  datepicker setDate: ${dateObj.toISOString().substring(0,10)}`);
+          const y = parseInt(parts[0], 10);
+          const mo = parseInt(parts[1], 10);
+          const d = parseInt(parts[2], 10);
+          if (!Number.isNaN(y) && !Number.isNaN(mo) && !Number.isNaN(d)) {
+            const dateObj = new Date(y, mo - 1, d, 12, 0, 0);
+            $(el).datepicker('setDate', dateObj);
+            log.push(`  datepicker setDate: ${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+          }
         }
       } catch (e) { log.push(`  datepicker err: ${e.message}`); }
 
@@ -629,9 +634,9 @@ async function setDateRange(frame, startDate, endDate) {
       return `"${before}" -> "${el.value}"`;
     }
 
-    const startIds = ['txtSrcStartDt', 'txtDtlSrcStartDt'];
-    const endIds = ['txtSrcEndDt', 'txtDtlSrcEndDt'];
-    let startSet = false, endSet = false;
+    const startIds = ['txtSrcStartDt', 'txtDtlSrcStartDt', 'txtFrDt', 'srcStartDt'];
+    const endIds = ['txtSrcEndDt', 'txtDtlSrcEndDt', 'txtToDt', 'srcEndDt'];
+    let startSet = false; let endSet = false;
 
     for (const id of startIds) {
       const el = document.getElementById(id);
@@ -652,24 +657,42 @@ async function setDateRange(frame, startDate, endDate) {
       }
     }
 
+    /** DOM 순서가 [종료][시작]인 경우 기존 로직은 종료만 채우고 시작을 건너뜀 → 화면 위치(왼쪽=시작, 오른쪽=종료)로 보강 */
+    function collectVisibleDateInputs() {
+      const all = Array.from(document.querySelectorAll('input[type="text"], input:not([type])'));
+      const out = [];
+      for (const el of all) {
+        const v = (el.value || '').trim();
+        const isDate = /\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(v) || el.classList.contains('hasDatepicker');
+        if (!isDate) continue;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 4 || rect.height < 4) continue;
+        out.push({ el, cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2 });
+      }
+      out.sort((a, b) => (Math.abs(a.cy - b.cy) > 10 ? a.cy - b.cy : a.cx - b.cx));
+      return out.map((o) => o.el);
+    }
+
     if (!startSet || !endSet) {
-      const allInputs = document.querySelectorAll('input[type="text"], input:not([type])');
-      for (const el of allInputs) {
-        if (startSet && endSet) break;
-        const v = el.value || '';
-        const id = el.id || '';
-        const name = el.name || '';
-        const isDate = /\d{4}[-/]\d{2}[-/]\d{2}/.test(v) || el.classList.contains('hasDatepicker');
-        if (!isDate || el.offsetParent === null) continue;
-        if (!startSet && (/start|str|from/i.test(id + name) || v <= sDash)) {
-          const r = setDateField(el, sDash, sSlash);
-          log.push(`start fallback ${id||name}: ${r}`);
+      const dateInputs = collectVisibleDateInputs();
+      if (dateInputs.length >= 2) {
+        if (!startSet) {
+          const r = setDateField(dateInputs[0], sDash, sSlash);
+          log.push(`start visual-order[0] ${dateInputs[0].id || dateInputs[0].name}: ${r}`);
           startSet = true;
-        } else if (!endSet) {
-          const r = setDateField(el, eDash, eSlash);
-          log.push(`end fallback ${id||name}: ${r}`);
+        }
+        if (!endSet) {
+          const endEl = dateInputs[dateInputs.length - 1];
+          const r = setDateField(endEl, eDash, eSlash);
+          log.push(`end visual-order[last] ${endEl.id || endEl.name}: ${r}`);
           endSet = true;
         }
+      } else if (dateInputs.length === 1 && !startSet) {
+        const r = setDateField(dateInputs[0], sDash, sSlash);
+        log.push(`start single-field ${dateInputs[0].id || dateInputs[0].name}: ${r}`);
+        startSet = true;
       }
     }
 
@@ -724,8 +747,8 @@ async function setDateRange(frame, startDate, endDate) {
   if (!afterCheck.startOk || !afterCheck.endOk) {
     logger.warn('날짜가 리셋됨! Playwright type()으로 재설정 후 재조회...');
 
-    const startSelectors = ['#txtSrcStartDt', '#txtDtlSrcStartDt'];
-    const endSelectors = ['#txtSrcEndDt', '#txtDtlSrcEndDt'];
+    const startSelectors = ['#txtSrcStartDt', '#txtDtlSrcStartDt', '#txtFrDt', '#srcStartDt'];
+    const endSelectors = ['#txtSrcEndDt', '#txtDtlSrcEndDt', '#txtToDt', '#srcEndDt'];
 
     for (const sel of startSelectors) {
       const el = frame.locator(sel).first();
